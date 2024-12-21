@@ -674,12 +674,9 @@
 #                         st.session_state.current_sections.pop(i)
 #                         st.experimental_rerun()
 
-
-#3rd version drw rectangele 
 import streamlit as st
-from streamlit_drawable_canvas import st_canvas
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 import logging
 from pathlib import Path
 from datetime import datetime
@@ -693,44 +690,32 @@ class TemplateTeachingInterface:
         self.initialize_session_state()
 
     def setup_logging(self):
-        """Setup logging configuration"""
         self.logger = logging.getLogger(__name__)
-        if not self.logger.handlers:
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter(
-                '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-            )
-            handler.setFormatter(formatter)
-            self.logger.addHandler(handler)
-            self.logger.setLevel(logging.INFO)
 
     def initialize_session_state(self):
-        """Initialize session state variables"""
         if 'current_page' not in st.session_state:
             st.session_state.current_page = 0
         if 'pages' not in st.session_state:
             st.session_state.pages = []
         if 'current_sections' not in st.session_state:
             st.session_state.current_sections = []
-        if 'show_section_form' not in st.session_state:
-            st.session_state.show_section_form = False
+        if 'temp_coords' not in st.session_state:
+            st.session_state.temp_coords = None
+        if 'drawing_rect' not in st.session_state:
+            st.session_state.drawing_rect = False
 
     def process_uploaded_file(self, uploaded_file):
-        """Process uploaded file and convert to list of images"""
         try:
             if uploaded_file.type == "application/pdf":
                 self.logger.info("Processing PDF file")
                 with st.spinner("Processing PDF file..."):
                     pdf_bytes = uploaded_file.read()
-                    if not is_valid_pdf(pdf_bytes):
-                        st.error("Invalid or corrupted PDF file")
-                        return None
                     images = pdf_to_images(pdf_bytes)
                     if images:
                         st.success(f"Successfully loaded {len(images)} pages")
                         return images
                     else:
-                        st.error("Failed to extract images from PDF")
+                        st.error("Failed to process PDF")
                         return None
             else:
                 image = Image.open(uploaded_file)
@@ -740,74 +725,94 @@ class TemplateTeachingInterface:
             st.error(f"Error processing file: {str(e)}")
             return None
 
-    def render_section_marking(self, image):
-        """Render the section marking interface"""
-        try:
-            # Ensure image is PIL Image
-            if isinstance(image, np.ndarray):
-                image = Image.fromarray(image)
+    def draw_sections_on_image(self, image):
+        """Draw existing sections on image"""
+        draw = ImageDraw.Draw(image)
+        
+        # Draw all marked sections
+        for section in st.session_state.current_sections:
+            if section['page'] == st.session_state.current_page:
+                coords = section['coordinates']
+                x1 = int(coords['x'] * image.width)
+                y1 = int(coords['y'] * image.height)
+                x2 = int((coords['x'] + coords['width']) * image.width)
+                y2 = int((coords['y'] + coords['height']) * image.height)
+                
+                # Draw rectangle
+                draw.rectangle([x1, y1, x2, y2], 
+                             outline='red', 
+                             width=2)
+                # Draw section name
+                draw.text((x1, y1-20), 
+                         section['name'], 
+                         fill='red')
+        
+        return image
 
-            # Create canvas for section marking
-            canvas_result = st_canvas(
-                fill_color="rgba(255, 165, 0, 0.3)",  # Semi-transparent orange
-                stroke_width=2,
-                stroke_color="#FF0000",  # Red border
-                background_image=image,
-                drawing_mode="rect",
-                update_streamlit=True,
-                key=f"canvas_{st.session_state.current_page}",
-                width=image.width,
-                height=image.height,
-                display_toolbar=True,
+    def render_image_with_sections(self, image, width=800):
+        """Render image with marked sections and controls"""
+        if isinstance(image, np.ndarray):
+            image = Image.fromarray(image)
+        
+        # Calculate display dimensions
+        display_width = width
+        ratio = display_width / image.width
+        display_height = int(image.height * ratio)
+        
+        # Draw existing sections
+        display_image = image.copy()
+        display_image = self.draw_sections_on_image(display_image)
+        
+        # Display image
+        st.image(display_image, width=display_width)
+        
+        # Section marking controls
+        st.markdown("### Add New Section")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            x = st.number_input("X Position (%)", 0, 100, 10)
+        with col2:
+            y = st.number_input("Y Position (%)", 0, 100, 10)
+        with col3:
+            w = st.number_input("Width (%)", 1, 100, 20)
+        with col4:
+            h = st.number_input("Height (%)", 1, 100, 20)
+
+        # Convert percentage to relative coordinates
+        coords = {
+            "x": x / 100,
+            "y": y / 100,
+            "width": w / 100,
+            "height": h / 100
+        }
+
+        # Section details
+        col1, col2 = st.columns(2)
+        with col1:
+            section_name = st.text_input("Section Name")
+        with col2:
+            section_type = st.selectbox(
+                "Section Type",
+                ["SIP Details", "OTM Section", "Transaction Type", "Other"]
             )
 
-            # Handle drawn sections
-            if canvas_result.json_data and canvas_result.json_data.get("objects"):
-                # Get the last drawn rectangle
-                rect = canvas_result.json_data["objects"][-1]
-                
-                # Show section properties form
-                with st.form(key="section_form"):
-                    st.markdown("### Add Section Details")
-                    
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        section_name = st.text_input("Section Name")
-                    with col2:
-                        section_type = st.selectbox(
-                            "Section Type",
-                            ["SIP Details", "OTM Section", "Transaction Type", "Other"]
-                        )
-                    
-                    # Calculate relative coordinates
-                    coords = {
-                        "x": rect["left"] / canvas_result.width,
-                        "y": rect["top"] / canvas_result.height,
-                        "width": rect["width"] / canvas_result.width,
-                        "height": rect["height"] / canvas_result.height
-                    }
-                    
-                    # Add section button
-                    if st.form_submit_button("Add Section"):
-                        if not section_name:
-                            st.error("Please enter a section name")
-                        else:
-                            new_section = {
-                                "name": section_name,
-                                "type": section_type,
-                                "coordinates": coords,
-                                "page": st.session_state.current_page
-                            }
-                            st.session_state.current_sections.append(new_section)
-                            st.success(f"Added section: {section_name}")
-                            st.experimental_rerun()
-
-        except Exception as e:
-            self.logger.error(f"Error in section marking: {str(e)}")
-            st.error("Error in section marking interface")
+        # Add section button
+        if st.button("Add Section"):
+            if not section_name:
+                st.error("Please enter a section name")
+            else:
+                new_section = {
+                    "name": section_name,
+                    "type": section_type,
+                    "coordinates": coords,
+                    "page": st.session_state.current_page
+                }
+                st.session_state.current_sections.append(new_section)
+                st.success(f"Added section: {section_name}")
+                st.experimental_rerun()
 
     def render_sections_list(self):
-        """Render list of marked sections"""
         if st.session_state.current_sections:
             st.markdown("### Marked Sections")
             
@@ -822,40 +827,16 @@ class TemplateTeachingInterface:
             # Display sections grouped by page
             for page in sorted(sections_by_page.keys()):
                 with st.expander(f"Page {page + 1}", expanded=True):
-                    for section in sections_by_page[page]:
+                    for i, section in enumerate(sections_by_page[page]):
                         cols = st.columns([3, 1])
                         with cols[0]:
                             st.write(f"• {section['name']} ({section['type']})")
                         with cols[1]:
-                            if st.button("Remove", key=f"remove_{page}_{section['name']}"):
+                            if st.button("Remove", key=f"remove_{page}_{i}"):
                                 st.session_state.current_sections.remove(section)
                                 st.experimental_rerun()
 
-    def save_template(self, template_name: str, form_type: str):
-        """Save template to file"""
-        try:
-            template_dir = Path("templates")
-            template_dir.mkdir(exist_ok=True)
-            
-            template_data = {
-                "name": template_name,
-                "form_type": form_type,
-                "sections": st.session_state.current_sections,
-                "created_at": datetime.now().isoformat()
-            }
-            
-            template_path = template_dir / f"{template_name.lower().replace(' ', '_')}.json"
-            with open(template_path, "w") as f:
-                json.dump(template_data, f, indent=4)
-                
-            return True
-        except Exception as e:
-            self.logger.error(f"Error saving template: {str(e)}")
-            st.error(f"Error saving template: {str(e)}")
-            return False
-
     def render(self):
-        """Main render method"""
         st.title("Form Template Teaching")
 
         # Instructions
@@ -863,24 +844,23 @@ class TemplateTeachingInterface:
             st.markdown("""
             ### Instructions:
             1. Upload your form (PDF or image)
-            2. Draw rectangles around important sections
+            2. Adjust the section coordinates using the controls
             3. Name and categorize each section
             4. Save the template when done
+            
+            Coordinates are entered as percentages of the image dimensions.
             """)
 
         # Main layout
         col1, col2 = st.columns([3, 1])
 
         with col1:
-            # File upload
             uploaded_file = st.file_uploader(
                 "Upload a form template",
-                type=['pdf', 'png', 'jpg', 'jpeg'],
-                help="Upload a PDF or image file of the form"
+                type=['pdf', 'png', 'jpg', 'jpeg']
             )
 
             if uploaded_file:
-                # Process uploaded file
                 images = self.process_uploaded_file(uploaded_file)
                 
                 if images:
@@ -901,13 +881,11 @@ class TemplateTeachingInterface:
                     # Get current image
                     current_image = images[st.session_state.current_page]
                     
-                    # Section marking interface
-                    st.markdown("### Mark Sections")
-                    st.caption("Draw rectangles around form sections")
-                    self.render_section_marking(current_image)
+                    # Render image with section marking interface
+                    self.render_image_with_sections(current_image)
 
         with col2:
-            # Template properties form
+            # Template properties
             with st.form("template_properties"):
                 st.markdown("### Template Details")
                 template_name = st.text_input("Template Name")
@@ -916,17 +894,32 @@ class TemplateTeachingInterface:
                     ["CA Form", "SIP Form", "Multiple SIP Form", "Other"]
                 )
                 
-                submit = st.form_submit_button("Save Template")
-                if submit:
+                if st.form_submit_button("Save Template"):
                     if not template_name:
                         st.error("Please enter a template name")
                     elif not st.session_state.current_sections:
                         st.error("Please mark at least one section")
                     else:
-                        if self.save_template(template_name, form_type):
+                        try:
+                            template_dir = Path("templates")
+                            template_dir.mkdir(exist_ok=True)
+                            
+                            template_data = {
+                                "name": template_name,
+                                "form_type": form_type,
+                                "sections": st.session_state.current_sections,
+                                "created_at": datetime.now().isoformat()
+                            }
+                            
+                            template_path = template_dir / f"{template_name.lower().replace(' ', '_')}.json"
+                            with open(template_path, "w") as f:
+                                json.dump(template_data, f, indent=4)
+                            
                             st.success("Template saved successfully!")
-                            st.session_state.current_sections = []  # Clear sections
+                            st.session_state.current_sections = []
                             st.experimental_rerun()
+                        except Exception as e:
+                            st.error(f"Error saving template: {str(e)}")
 
-            # Show list of marked sections
+            # Show marked sections
             self.render_sections_list()
