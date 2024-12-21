@@ -143,7 +143,7 @@
 #                     file_name=f"form_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
 #                     mime="application/json"
 #                 )
-
+#2nd version 
 import streamlit as st
 import numpy as np
 from PIL import Image
@@ -152,6 +152,7 @@ from datetime import datetime
 from pathlib import Path
 import json
 import io
+from typing import Dict, List, Optional  # Added typing imports
 
 from ..core.processor import FormProcessor
 
