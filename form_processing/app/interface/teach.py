@@ -477,44 +477,44 @@ class TemplateTeachingInterface:
                 st.error(f"Error setting up annotation canvas: {str(e)}")
                 return None
 
-        def handle_annotations(self, canvas_data):
-            """Handle annotations from both rectangle and point selection modes"""
-            if not canvas_data:
-                return
+    def handle_annotations(self, canvas_data):
+        """Handle annotations from both rectangle and point selection modes"""
+        if not canvas_data:
+            return
 
-            mode = canvas_data["mode"]
-            canvas_result = canvas_data["result"]
+        mode = canvas_data["mode"]
+        canvas_result = canvas_data["result"]
 
-            if canvas_result and canvas_result.json_data:
-                objects = canvas_result.json_data.get("objects", [])
-                if objects:
-                    with st.form("section_properties"):
-                        st.subheader("Add Section")
-                        section_name = st.text_input("Section Name")
-                        section_type = st.selectbox(
-                            "Section Type",
-                            ["SIP Details", "OTM Section", "Transaction Type", "Other"]
-                        )
-                        
-                        if st.form_submit_button("Add Section"):
-                            if not section_name:
-                                st.warning("Please enter a section name")
-                                return
+        if canvas_result and canvas_result.json_data:
+            objects = canvas_result.json_data.get("objects", [])
+            if objects:
+                with st.form("section_properties"):
+                    st.subheader("Add Section")
+                    section_name = st.text_input("Section Name")
+                    section_type = st.selectbox(
+                        "Section Type",
+                        ["SIP Details", "OTM Section", "Transaction Type", "Other"]
+                    )
+                    
+                    if st.form_submit_button("Add Section"):
+                        if not section_name:
+                            st.warning("Please enter a section name")
+                            return
 
-                            rect = objects[-1]
-                            new_section = {
-                                "name": section_name,
-                                "type": section_type,
-                                "coordinates": {
-                                    "x": rect["left"] / canvas_result.width,
-                                    "y": rect["top"] / canvas_result.height,
-                                    "width": rect["width"] / canvas_result.width,
-                                    "height": rect["height"] / canvas_result.height
-                                },
-                                "page": st.session_state.current_page
-                            }
-                            st.session_state.current_sections.append(new_section)
-                            st.success(f"Added section: {section_name}")
+                        rect = objects[-1]
+                        new_section = {
+                            "name": section_name,
+                            "type": section_type,
+                            "coordinates": {
+                                "x": rect["left"] / canvas_result.width,
+                                "y": rect["top"] / canvas_result.height,
+                                "width": rect["width"] / canvas_result.width,
+                                "height": rect["height"] / canvas_result.height
+                            },
+                            "page": st.session_state.current_page
+                        }
+                        st.session_state.current_sections.append(new_section)
+                        st.success(f"Added section: {section_name}")
                             
     # def render_canvas(self, current_image):
     #     """Render the annotation canvas with proper error handling"""
