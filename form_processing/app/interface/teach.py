@@ -386,6 +386,7 @@
 #             json.dump(template_data, f, indent=4)
 #above code is for rectangle section taking and draw 4 points but not working so 
 import streamlit as st
+from streamlit_drawable_canvas import st_canvas
 from PIL import Image, ImageDraw
 import numpy as np
 import io
