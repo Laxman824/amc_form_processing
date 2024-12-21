@@ -673,8 +673,8 @@
 #                     if st.button("Remove", key=f"remove_{i}"):
 #                         st.session_state.current_sections.pop(i)
 #                         st.experimental_rerun()
-
 import streamlit as st
+from streamlit_cropper import st_cropper
 import numpy as np
 from PIL import Image, ImageDraw
 import logging
@@ -699,10 +699,8 @@ class TemplateTeachingInterface:
             st.session_state.pages = []
         if 'current_sections' not in st.session_state:
             st.session_state.current_sections = []
-        if 'temp_coords' not in st.session_state:
-            st.session_state.temp_coords = None
-        if 'drawing_rect' not in st.session_state:
-            st.session_state.drawing_rect = False
+        if 'current_image' not in st.session_state:
+            st.session_state.current_image = None
 
     def process_uploaded_file(self, uploaded_file):
         try:
@@ -725,11 +723,11 @@ class TemplateTeachingInterface:
             st.error(f"Error processing file: {str(e)}")
             return None
 
-    def draw_sections_on_image(self, image):
+    def draw_existing_sections(self, image):
         """Draw existing sections on image"""
-        draw = ImageDraw.Draw(image)
+        img_draw = ImageDraw.Draw(image)
         
-        # Draw all marked sections
+        # Draw all sections for current page
         for section in st.session_state.current_sections:
             if section['page'] == st.session_state.current_page:
                 coords = section['coordinates']
@@ -738,81 +736,77 @@ class TemplateTeachingInterface:
                 x2 = int((coords['x'] + coords['width']) * image.width)
                 y2 = int((coords['y'] + coords['height']) * image.height)
                 
-                # Draw rectangle
-                draw.rectangle([x1, y1, x2, y2], 
-                             outline='red', 
-                             width=2)
+                # Draw rectangle for section
+                img_draw.rectangle([x1, y1, x2, y2], 
+                                outline='red', 
+                                width=2)
                 # Draw section name
-                draw.text((x1, y1-20), 
-                         section['name'], 
-                         fill='red')
-        
+                img_draw.text((x1, y1-20), 
+                            section['name'], 
+                            fill='red')
         return image
 
-    def render_image_with_sections(self, image, width=800):
-        """Render image with marked sections and controls"""
+    def render_section_selection(self, image):
+        """Render section selection using streamlit-cropper"""
         if isinstance(image, np.ndarray):
             image = Image.fromarray(image)
-        
-        # Calculate display dimensions
-        display_width = width
-        ratio = display_width / image.width
-        display_height = int(image.height * ratio)
-        
-        # Draw existing sections
-        display_image = image.copy()
-        display_image = self.draw_sections_on_image(display_image)
-        
-        # Display image
-        st.image(display_image, width=display_width)
-        
-        # Section marking controls
-        st.markdown("### Add New Section")
-        
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            x = st.number_input("X Position (%)", 0, 100, 10)
-        with col2:
-            y = st.number_input("Y Position (%)", 0, 100, 10)
-        with col3:
-            w = st.number_input("Width (%)", 1, 100, 20)
-        with col4:
-            h = st.number_input("Height (%)", 1, 100, 20)
 
-        # Convert percentage to relative coordinates
-        coords = {
-            "x": x / 100,
-            "y": y / 100,
-            "width": w / 100,
-            "height": h / 100
-        }
+        # Draw existing sections on image
+        image_with_sections = self.draw_existing_sections(image.copy())
+        
+        st.markdown("### Select Section")
+        st.caption("Drag to select the section area")
 
-        # Section details
-        col1, col2 = st.columns(2)
-        with col1:
-            section_name = st.text_input("Section Name")
-        with col2:
-            section_type = st.selectbox(
-                "Section Type",
-                ["SIP Details", "OTM Section", "Transaction Type", "Other"]
-            )
+        # Use streamlit-cropper for section selection
+        cropped_img = st_cropper(
+            image_with_sections,
+            realtime_update=True,
+            box_color='red',
+            aspect_ratio=None,
+            return_type='box',
+            key=f"cropper_{st.session_state.current_page}"
+        )
 
-        # Add section button
-        if st.button("Add Section"):
-            if not section_name:
-                st.error("Please enter a section name")
-            else:
-                new_section = {
-                    "name": section_name,
-                    "type": section_type,
-                    "coordinates": coords,
-                    "page": st.session_state.current_page
+        # Show section properties form when area is selected
+        if cropped_img and isinstance(cropped_img, dict):
+            with st.form("section_properties"):
+                st.markdown("### Section Details")
+                
+                # Calculate relative coordinates
+                coords = {
+                    "x": cropped_img['left'] / image.width,
+                    "y": cropped_img['top'] / image.height,
+                    "width": cropped_img['width'] / image.width,
+                    "height": cropped_img['height'] / image.height
                 }
-                st.session_state.current_sections.append(new_section)
-                st.success(f"Added section: {section_name}")
-                st.experimental_rerun()
+
+                # Section properties
+                col1, col2 = st.columns(2)
+                with col1:
+                    section_name = st.text_input("Section Name")
+                with col2:
+                    section_type = st.selectbox(
+                        "Section Type",
+                        ["SIP Details", "OTM Section", "Transaction Type", "Other"]
+                    )
+
+                # Add section button
+                if st.form_submit_button("Add Section"):
+                    if not section_name:
+                        st.error("Please enter a section name")
+                    else:
+                        new_section = {
+                            "name": section_name,
+                            "type": section_type,
+                            "coordinates": coords,
+                            "page": st.session_state.current_page
+                        }
+                        st.session_state.current_sections.append(new_section)
+                        st.success(f"Added section: {section_name}")
+                        st.experimental_rerun()
 
     def render_sections_list(self):
+        """Render list of marked sections"""
         if st.session_state.current_sections:
             st.markdown("### Marked Sections")
             
@@ -826,7 +820,7 @@ class TemplateTeachingInterface:
             
             # Display sections grouped by page
             for page in sorted(sections_by_page.keys()):
-                with st.expander(f"Page {page + 1}", expanded=True):
+                with st.expander(f"Page {page + 1}", expanded=(page == st.session_state.current_page)):
                     for i, section in enumerate(sections_by_page[page]):
                         cols = st.columns([3, 1])
                         with cols[0]:
@@ -844,11 +838,11 @@ class TemplateTeachingInterface:
             st.markdown("""
             ### Instructions:
             1. Upload your form (PDF or image)
-            2. Adjust the section coordinates using the controls
+            2. Drag to select sections on the form
             3. Name and categorize each section
             4. Save the template when done
             
-            Coordinates are entered as percentages of the image dimensions.
+            **Tip**: Click and drag on the form to select sections
             """)
 
         # Main layout
@@ -881,8 +875,8 @@ class TemplateTeachingInterface:
                     # Get current image
                     current_image = images[st.session_state.current_page]
                     
-                    # Render image with section marking interface
-                    self.render_image_with_sections(current_image)
+                    # Show section selection interface
+                    self.render_section_selection(current_image)
 
         with col2:
             # Template properties
