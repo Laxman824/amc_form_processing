@@ -613,3 +613,39 @@ class TemplateTeachingInterface:
         template_path = template_dir / f"{template_name.lower().replace(' ', '_')}.json"
         with open(template_path, "w") as f:
             json.dump(template_data, f, indent=4)
+    def process_uploaded_file(self, uploaded_file):
+            """Process uploaded file and convert to list of images"""
+            try:
+                if uploaded_file.type == "application/pdf":
+                    self.logger.info("Processing PDF file")
+                    st.info("Processing PDF file... This may take a moment.")
+                    
+                    # Get PDF bytes
+                    pdf_bytes = uploaded_file.read()
+                    
+                    # Validate PDF
+                    if not is_valid_pdf(pdf_bytes):
+                        st.error("Invalid or corrupted PDF file")
+                        return None
+                    
+                    # Convert PDF to images
+                    with st.spinner("Converting PDF pages to images..."):
+                        images = pdf_to_images(pdf_bytes)
+                    
+                    if not images:
+                        st.error("Failed to extract images from PDF")
+                        return None
+                        
+                    st.success(f"Successfully extracted {len(images)} pages from PDF")
+                    return images
+                    
+                else:
+                    self.logger.info("Processing image file")
+                    # Handle image files
+                    image = Image.open(uploaded_file)
+                    return [np.array(image)]
+                    
+            except Exception as e:
+                self.logger.error(f"Error processing file: {str(e)}")
+                st.error(f"Error processing file: {str(e)}")
+                return None
