@@ -400,6 +400,7 @@ class TemplateTeachingInterface:
         self.initialize_session_state()
 
     def initialize_session_state(self):
+        """Initialize all session state variables"""
         if 'current_page' not in st.session_state:
             st.session_state.current_page = 0
         if 'pages' not in st.session_state:
@@ -408,8 +409,11 @@ class TemplateTeachingInterface:
             st.session_state.current_sections = []
         if 'points' not in st.session_state:
             st.session_state.points = []
-        if 'current_image' not in st.session_state:
-            st.session_state.current_image = None
+        if 'show_section_form' not in st.session_state:
+            st.session_state.show_section_form = False
+        if 'temp_section' not in st.session_state:
+            st.session_state.temp_section = None
+
     def setup_logging(self):
         self.logger = logging.getLogger(__name__)
 
@@ -509,14 +513,87 @@ class TemplateTeachingInterface:
         return None
 
     def render_selection_interface(self, image):
-        """Render the section selection interface"""
+        """Render the section selection interface with reliable point selection"""
         st.markdown("### Select Section Points")
-        st.write("Click 4 points to define the section")
         
-        section = self.handle_click(image)
+        # Create a grid of clickable points over the image
+        # First display the image
+        display_width = 800
+        scale_factor = display_width / image.width
+        display_height = int(image.height * scale_factor)
         
-        if section:
-            # Show section properties form
+        # Create copy of image for drawing
+        display_image = image.copy()
+        
+        # Draw existing points
+        if st.session_state.points:
+            draw = ImageDraw.Draw(display_image)
+            for i, point in enumerate(st.session_state.points):
+                x, y = point
+                # Draw red circle
+                draw.ellipse([x-5, y-5, x+5, y+5], fill='red', outline='white')
+                # Draw number
+                draw.text((x+7, y-7), str(i+1), fill='red', stroke_fill='white')
+        
+        col1, col2 = st.columns([4, 1])
+        
+        with col1:
+            # Display the image
+            st.image(display_image, width=display_width)
+            
+            # Create a grid of invisible buttons over the image
+            num_rows = 10
+            num_cols = 10
+            
+            # Calculate grid cell size
+            cell_width = image.width / num_cols
+            cell_height = image.height / num_rows
+            
+            # Create grid of buttons
+            for row in range(num_rows):
+                cols = st.columns(num_cols)
+                for col in range(num_cols):
+                    with cols[col]:
+                        # Create an invisible button
+                        if st.button("", key=f"btn_{row}_{col}", help="Click to add point"):
+                            # Calculate actual coordinates
+                            x = int((col + 0.5) * cell_width)
+                            y = int((row + 0.5) * cell_height)
+                            
+                            if len(st.session_state.points) < 4:
+                                st.session_state.points.append((x, y))
+                                st.experimental_rerun()
+        
+        with col2:
+            st.write(f"Points: {len(st.session_state.points)}/4")
+            if st.button("Clear Points"):
+                st.session_state.points = []
+                st.experimental_rerun()
+            
+            # Show create section button when 4 points are selected
+            if len(st.session_state.points) == 4:
+                if st.button("Create Section", type="primary"):
+                    x_coords = [p[0] for p in st.session_state.points]
+                    y_coords = [p[1] for p in st.session_state.points]
+                    
+                    section = {
+                        "x": min(x_coords) / image.width,
+                        "y": min(y_coords) / image.height,
+                        "width": (max(x_coords) - min(x_coords)) / image.width,
+                        "height": (max(y_coords) - min(y_coords)) / image.height
+                    }
+                    
+                    # Show section properties form
+                    st.session_state.show_section_form = True
+                    st.session_state.temp_section = section
+                    st.experimental_rerun()
+            
+            elif len(st.session_state.points) < 4:
+                points_left = 4 - len(st.session_state.points)
+                st.info(f"Select {points_left} more point{'s' if points_left > 1 else ''}")
+        
+        # Show section properties form if needed
+        if st.session_state.get('show_section_form', False):
             with st.form("section_properties"):
                 st.subheader("Add Section")
                 section_name = st.text_input("Section Name")
@@ -525,16 +602,20 @@ class TemplateTeachingInterface:
                     ["SIP Details", "OTM Section", "Transaction Type", "Other"]
                 )
                 
-                if st.form_submit_button("Add Section"):
+                if st.form_submit_button("Save Section"):
                     if section_name:
                         new_section = {
                             "name": section_name,
                             "type": section_type,
-                            "coordinates": section,
+                            "coordinates": st.session_state.temp_section,
                             "page": st.session_state.current_page
                         }
                         st.session_state.current_sections.append(new_section)
-                        st.session_state.points = []  # Clear points
+                        # Clear temporary data
+                        st.session_state.points = []
+                        st.session_state.show_section_form = False
+                        if 'temp_section' in st.session_state:
+                            del st.session_state.temp_section
                         st.success(f"Added section: {section_name}")
                         st.experimental_rerun()
                     else:
