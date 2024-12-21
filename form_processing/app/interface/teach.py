@@ -674,7 +674,8 @@
 #                         st.session_state.current_sections.pop(i)
 #                         st.experimental_rerun()
 import streamlit as st
-from streamlit_cropper import st_cropper
+# from streamlit_cropper import st_cropper
+from streamlit_cropperjs import st_cropperjs
 import numpy as np
 from PIL import Image, ImageDraw
 import logging
@@ -758,7 +759,7 @@ class TemplateTeachingInterface:
         st.caption("Drag to select the section area")
 
         # Use streamlit-cropper for section selection
-        cropped_img = st_cropper(
+        cropped_img = st_cropperjs(
             image_with_sections,
             realtime_update=True,
             box_color='red',
