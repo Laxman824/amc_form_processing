@@ -152,7 +152,8 @@ from datetime import datetime
 from pathlib import Path
 import json
 import io
-from typing import Dict, List, Optional  # Added typing imports
+import fitz  # PyMuPDF
+from typing import Dict, List, Optional
 
 from ..core.processor import FormProcessor
 
@@ -164,18 +165,48 @@ class ProcessingInterface:
     def setup_logging(self):
         self.logger = logging.getLogger(__name__)
 
+    def process_pdf(self, pdf_bytes: bytes) -> List[np.ndarray]:
+        """Process PDF using PyMuPDF"""
+        try:
+            # Open PDF
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            images = []
+            
+            for page_num in range(len(doc)):
+                # Get page
+                page = doc[page_num]
+                
+                # Convert page to image
+                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # 2x zoom for better quality
+                img_data = pix.tobytes("png")
+                
+                # Convert to numpy array
+                img = Image.open(io.BytesIO(img_data))
+                images.append(np.array(img))
+            
+            doc.close()
+            return images
+            
+        except Exception as e:
+            self.logger.error(f"Error processing PDF: {e}")
+            raise
+
     def process_file(self, uploaded_file) -> Dict:
         """Process uploaded file"""
         try:
             # Convert to images
             if uploaded_file.type == "application/pdf":
-                from pdf2image import convert_from_bytes
                 pdf_bytes = uploaded_file.read()
-                images = convert_from_bytes(pdf_bytes)
-                images = [np.array(img) for img in images]
+                images = self.process_pdf(pdf_bytes)
             else:
                 image = Image.open(uploaded_file)
                 images = [np.array(image)]
+
+            if not images:
+                return {
+                    'status': 'error',
+                    'message': 'Failed to extract images from file'
+                }
 
             # Process form
             results = self.processor.process_form(images)
@@ -201,52 +232,67 @@ class ProcessingInterface:
         with col1:
             st.write(f"Form Type: {results['form_type']}")
         with col2:
-            st.write(f"Confidence: {results['confidence']:.2%}")
+            conf = results.get('confidence', 0)
+            st.write(f"Confidence: {conf:.2%}")
 
         # Overall status
         st.markdown("#### Form Status")
         status_col1, status_col2 = st.columns(2)
         with status_col1:
-            color = "green" if results['sip_details_filled'] else "red"
-            st.markdown(f"SIP Details: :{color}[{'✓' if results['sip_details_filled'] else '✗'}]")
+            color = "green" if results.get('sip_details_filled', False) else "red"
+            st.markdown(f"SIP Details: :{color}[{'✓' if results.get('sip_details_filled', False) else '✗'}]")
         with status_col2:
-            color = "green" if results['otm_details_filled'] else "red"
-            st.markdown(f"OTM Details: :{color}[{'✓' if results['otm_details_filled'] else '✗'}]")
+            color = "green" if results.get('otm_details_filled', False) else "red"
+            st.markdown(f"OTM Details: :{color}[{'✓' if results.get('otm_details_filled', False) else '✗'}]")
 
         # Section details
-        st.markdown("#### Section Details")
-        for section_name, section_data in results['sections'].items():
-            with st.expander(f"{section_name.replace('_', ' ').title()}", expanded=True):
-                # Section status
-                color = "green" if section_data['filled'] else "red"
-                st.markdown(f"Status: :{color}[{'Filled' if section_data['filled'] else 'Not Filled'}]")
-                
-                # Section details
-                st.markdown("Details:")
-                for key, value in section_data['details'].items():
-                    st.write(f"- {key.replace('_', ' ').title()}: {value}")
+        if 'sections' in results:
+            st.markdown("#### Section Details")
+            for section_name, section_data in results['sections'].items():
+                with st.expander(f"{section_name.replace('_', ' ').title()}", expanded=True):
+                    if isinstance(section_data, dict):
+                        # Section status
+                        color = "green" if section_data.get('filled', False) else "red"
+                        st.markdown(f"Status: :{color}[{'Filled' if section_data.get('filled', False) else 'Not Filled'}]")
+                        
+                        # Section details
+                        if 'details' in section_data:
+                            st.markdown("Details:")
+                            for key, value in section_data['details'].items():
+                                st.write(f"- {key.replace('_', ' ').title()}: {value}")
 
     def render(self):
         """Render processing interface"""
         st.title("Form Processing")
 
+        # File upload section
+        st.markdown("### Upload Forms")
         uploaded_files = st.file_uploader(
             "Upload forms for processing",
             type=['pdf', 'png', 'jpg', 'jpeg'],
-            accept_multiple_files=True
+            accept_multiple_files=True,
+            help="Upload PDF or image files of the forms"
         )
 
         if uploaded_files:
             results_list = []
 
-            # Process each file
-            for uploaded_file in uploaded_files:
+            # Process each file with progress
+            progress_text = "Processing forms..."
+            my_bar = st.progress(0, text=progress_text)
+            
+            for i, uploaded_file in enumerate(uploaded_files):
+                progress = (i + 1) / len(uploaded_files)
+                my_bar.progress(progress, text=f"Processing {uploaded_file.name}...")
+                
                 with st.spinner(f"Processing {uploaded_file.name}..."):
                     results = self.process_file(uploaded_file)
                     results_list.append({
                         'filename': uploaded_file.name,
                         'results': results
                     })
+            
+            my_bar.empty()
 
             # Display results for each file
             for file_results in results_list:
@@ -256,7 +302,7 @@ class ProcessingInterface:
                 )
 
             # Export results
-            if st.button("Export Results"):
+            if results_list:
                 export_data = {
                     'timestamp': datetime.now().isoformat(),
                     'results': results_list
@@ -265,10 +311,10 @@ class ProcessingInterface:
                 # Convert to JSON
                 json_str = json.dumps(export_data, indent=2)
                 
-                # Create download button
                 st.download_button(
                     label="Download Results",
                     data=json_str,
                     file_name=f"form_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                    mime="application/json"
+                    mime="application/json",
+                    help="Download the processing results as JSON file"
                 )
