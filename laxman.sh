@@ -11,4 +11,4 @@ touch form_processing/app/models/{template.py,form.py}
 touch form_processing/app/utils/{image.py,storage.py}
 touch form_processing/requirements.txt
 
-echo "Structure created successfully!"
+echo "Structure created successfully for now !"
