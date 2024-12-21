@@ -393,6 +393,7 @@ import logging
 from pathlib import Path
 from datetime import datetime
 import json
+from streamlit_drawable_canvas import st_canvas
 from ..utils.pdf import pdf_to_images, is_valid_pdf
 class TemplateTeachingInterface:
     def __init__(self):
