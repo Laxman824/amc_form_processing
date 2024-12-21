@@ -4,3 +4,6 @@ tesseract-ocr-eng
 libgl1
 ghostscript
 python3-tk
+python3-opencv
+
+
