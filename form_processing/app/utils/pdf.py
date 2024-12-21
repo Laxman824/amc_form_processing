@@ -120,3 +120,16 @@ def is_valid_pdf(pdf_bytes: bytes) -> bool:
     except Exception as e:
         logger.error(f"Invalid PDF: {str(e)}")
         return False
+def check_pdf_support() -> bool:
+    """Check if PDF support is available"""
+    try:
+        # Check pdf2image
+        from pdf2image import convert_from_bytes
+        
+        # Check PyMuPDF
+        import fitz
+        
+        return True
+    except Exception as e:
+        logger.warning(f"PDF support not available: {str(e)}")
+        return False
