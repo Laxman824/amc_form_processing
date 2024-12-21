@@ -251,6 +251,9 @@ class TemplateTeachingInterface:
 
             # Show marked sections
             self.render_sections_list()
+            # Show saved templates
+            st.markdown("---")
+            self.view_saved_templates()           
     def view_saved_templates(self):
             """View all saved templates"""
             template_dir = Path("templates")
