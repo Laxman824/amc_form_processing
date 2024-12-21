@@ -284,92 +284,218 @@ class TemplateTeachingInterface:
             st.error(f"Error processing file: {str(e)}")
             return None
 
-    def render(self):
-        st.title("Template Teaching Interface")
+    # def render(self):
+    #     st.title("Template Teaching Interface")
 
-        col1, col2 = st.columns([3, 1])
+    #     col1, col2 = st.columns([3, 1])
 
-        with col1:
-            uploaded_file = st.file_uploader(
-                "Upload a form template",
-                type=['pdf', 'png', 'jpg', 'jpeg']
-            )
+    #     with col1:
+    #         uploaded_file = st.file_uploader(
+    #             "Upload a form template",
+    #             type=['pdf', 'png', 'jpg', 'jpeg']
+    #         )
 
-            if uploaded_file:
-                images = self.process_uploaded_file(uploaded_file)
-                if images:
-                    st.session_state.pages = images
+    #         if uploaded_file:
+    #             images = self.process_uploaded_file(uploaded_file)
+    #             if images:
+    #                 st.session_state.pages = images
 
-                    # Page selection if PDF has multiple pages
-                    if len(images) > 1:
-                        page_col1, page_col2 = st.columns([3, 1])
-                        with page_col1:
-                            st.session_state.current_page = st.slider(
-                                "Select Page",
-                                0,
-                                len(images) - 1,
-                                st.session_state.current_page
-                            )
-                        with page_col2:
-                            st.write(f"Page {st.session_state.current_page + 1} of {len(images)}")
+    #                 # Page selection if PDF has multiple pages
+    #                 if len(images) > 1:
+    #                     page_col1, page_col2 = st.columns([3, 1])
+    #                     with page_col1:
+    #                         st.session_state.current_page = st.slider(
+    #                             "Select Page",
+    #                             0,
+    #                             len(images) - 1,
+    #                             st.session_state.current_page
+    #                         )
+    #                     with page_col2:
+    #                         st.write(f"Page {st.session_state.current_page + 1} of {len(images)}")
 
-                    # Display current page
-                    current_image = st.session_state.pages[st.session_state.current_page]
-                    if isinstance(current_image, np.ndarray):
-                        current_image = Image.fromarray(current_image)
+    #                 # Display current page
+    #                 current_image = st.session_state.pages[st.session_state.current_page]
+    #                 if isinstance(current_image, np.ndarray):
+    #                     current_image = Image.fromarray(current_image)
 
-                    # First display the image normally
-                    st.image(current_image, caption=f"Page {st.session_state.current_page + 1}", use_column_width=True)
+    #                 # First display the image normally
+    #                 st.image(current_image, caption=f"Page {st.session_state.current_page + 1}", use_column_width=True)
 
-                    # Then create the annotation canvas
-                    canvas_result = st_canvas(
-                        fill_color="rgba(255, 165, 0, 0.3)",
-                        stroke_width=2,
-                        stroke_color="#e00",
-                        background_image=current_image,
-                        drawing_mode="rect",
-                        key=f"canvas_{st.session_state.current_page}",
-                        update_streamlit=True,
-                        width=current_image.width,
-                        height=current_image.height
-                    )
+    #                 # Then create the annotation canvas
+    #                 canvas_result = st_canvas(
+    #                     fill_color="rgba(255, 165, 0, 0.3)",
+    #                     stroke_width=2,
+    #                     stroke_color="#e00",
+    #                     background_image=current_image,
+    #                     drawing_mode="rect",
+    #                     key=f"canvas_{st.session_state.current_page}",
+    #                     update_streamlit=True,
+    #                     width=current_image.width,
+    #                     height=current_image.height
+    #                 )
 
-                    if canvas_result.json_data and canvas_result.json_data.get("objects"):
-                        self.handle_annotations(canvas_result)
+    #                 if canvas_result.json_data and canvas_result.json_data.get("objects"):
+    #                     self.handle_annotations(canvas_result)
 
-        with col2:
-            st.subheader("Template Details")
+    #     with col2:
+    #         st.subheader("Template Details")
             
-            # Form for template properties
-            with st.form("template_properties"):
-                template_name = st.text_input("Template Name")
-                form_type = st.selectbox(
-                    "Form Type",
-                    ["CA Form", "SIP Form", "Multiple SIP Form", "Other"]
-                )
-                submit_button = st.form_submit_button("Save Template")
+    #         # Form for template properties
+    #         with st.form("template_properties"):
+    #             template_name = st.text_input("Template Name")
+    #             form_type = st.selectbox(
+    #                 "Form Type",
+    #                 ["CA Form", "SIP Form", "Multiple SIP Form", "Other"]
+    #             )
+    #             submit_button = st.form_submit_button("Save Template")
                 
-                if submit_button:
-                    if not template_name:
-                        st.error("Please enter a template name")
-                    elif not st.session_state.current_sections:
-                        st.error("Please mark at least one section")
-                    else:
-                        self.save_template(template_name, form_type)
-                        st.success("Template saved successfully!")
+    #             if submit_button:
+    #                 if not template_name:
+    #                     st.error("Please enter a template name")
+    #                 elif not st.session_state.current_sections:
+    #                     st.error("Please mark at least one section")
+    #                 else:
+    #                     self.save_template(template_name, form_type)
+    #                     st.success("Template saved successfully!")
 
-            # Display marked sections
-            if st.session_state.current_sections:
-                st.subheader("Marked Sections")
-                for i, section in enumerate(st.session_state.current_sections):
-                    with st.container():
-                        col1, col2 = st.columns([3, 1])
-                        with col1:
-                            st.write(f"{section['name']} (Page {section['page'] + 1})")
-                        with col2:
-                            if st.button("Remove", key=f"remove_{i}"):
-                                st.session_state.current_sections.pop(i)
-                                st.experimental_rerun()
+    #         # Display marked sections
+    #         if st.session_state.current_sections:
+    #             st.subheader("Marked Sections")
+    #             for i, section in enumerate(st.session_state.current_sections):
+    #                 with st.container():
+    #                     col1, col2 = st.columns([3, 1])
+    #                     with col1:
+    #                         st.write(f"{section['name']} (Page {section['page'] + 1})")
+    #                     with col2:
+    #                         if st.button("Remove", key=f"remove_{i}"):
+    #                             st.session_state.current_sections.pop(i)
+    #                             st.experimental_rerun()
+    def render(self):
+            st.title("Template Teaching Interface")
+
+            # Add instructions
+            with st.expander("How to Mark Sections", expanded=True):
+                st.markdown("""
+                ### Instructions for Marking Sections:
+                1. **Navigate Pages**: Use the slider to move between pages
+                2. **Mark Sections**: 
+                - Draw a rectangle around the section
+                - Enter section name and type
+                - Click 'Add Section'
+                3. **Review Sections**: Check marked sections list on the right
+                4. **Save Template**: Enter template name and save when done
+                """)
+
+            col1, col2 = st.columns([3, 1])
+
+            with col1:
+                uploaded_file = st.file_uploader(
+                    "Upload a form template",
+                    type=['pdf', 'png', 'jpg', 'jpeg']
+                )
+
+                if uploaded_file:
+                    images = self.process_uploaded_file(uploaded_file)
+                    if images:
+                        st.session_state.pages = images
+
+                        # Enhanced page navigation
+                        if len(images) > 1:
+                            st.markdown("### Page Navigation")
+                            page_col1, page_col2, page_col3 = st.columns([2, 1, 1])
+                            
+                            with page_col1:
+                                st.session_state.current_page = st.slider(
+                                    "Select Page",
+                                    0,
+                                    len(images) - 1,
+                                    st.session_state.current_page
+                                )
+                            with page_col2:
+                                st.write(f"Page {st.session_state.current_page + 1} of {len(images)}")
+                            with page_col3:
+                                # Count sections on current page
+                                current_page_sections = len([
+                                    s for s in st.session_state.current_sections 
+                                    if s['page'] == st.session_state.current_page
+                                ])
+                                st.write(f"Sections on page: {current_page_sections}")
+
+                        # Display current page
+                        current_image = st.session_state.pages[st.session_state.current_page]
+                        if isinstance(current_image, np.ndarray):
+                            current_image = Image.fromarray(current_image)
+
+                        st.markdown("### Current Page View")
+                        st.image(current_image, caption=f"Page {st.session_state.current_page + 1}", use_column_width=True)
+
+                        st.markdown("### Draw Sections")
+                        st.caption("Click and drag to draw a rectangle around a section")
+                        
+                        # Annotation canvas
+                        canvas_result = st_canvas(
+                            fill_color="rgba(255, 165, 0, 0.3)",
+                            stroke_width=2,
+                            stroke_color="#e00",
+                            background_image=current_image,
+                            drawing_mode="rect",
+                            key=f"canvas_{st.session_state.current_page}",
+                            update_streamlit=True,
+                            width=current_image.width,
+                            height=current_image.height
+                        )
+
+                        if canvas_result.json_data and canvas_result.json_data.get("objects"):
+                            self.handle_annotations(canvas_result)
+
+            with col2:
+                st.subheader("Template Details")
+                
+                # Display sections grouped by page
+                if st.session_state.current_sections:
+                    st.markdown("### Marked Sections by Page")
+                    
+                    # Group sections by page
+                    sections_by_page = {}
+                    for section in st.session_state.current_sections:
+                        page = section['page']
+                        if page not in sections_by_page:
+                            sections_by_page[page] = []
+                        sections_by_page[page].append(section)
+                    
+                    # Display sections grouped by page
+                    for page in sorted(sections_by_page.keys()):
+                        with st.expander(f"Page {page + 1}", expanded=True):
+                            for section in sections_by_page[page]:
+                                cols = st.columns([3, 1])
+                                with cols[0]:
+                                    st.write(f"• {section['name']} ({section['type']})")
+                                with cols[1]:
+                                    if st.button("Remove", key=f"remove_{page}_{section['name']}"):
+                                        st.session_state.current_sections.remove(section)
+                                        st.experimental_rerun()
+                
+                st.markdown("---")
+                
+                # Template saving form
+                with st.form("template_properties"):
+                    st.markdown("### Save Template")
+                    template_name = st.text_input("Template Name")
+                    form_type = st.selectbox(
+                        "Form Type",
+                        ["CA Form", "SIP Form", "Multiple SIP Form", "Other"]
+                    )
+                    submit_button = st.form_submit_button("Save Template")
+                    
+                    if submit_button:
+                        if not template_name:
+                            st.error("Please enter a template name")
+                        elif not st.session_state.current_sections:
+                            st.error("Please mark at least one section")
+                        else:
+                            self.save_template(template_name, form_type)
+                            st.success("Template saved successfully!")
+
 
     def handle_annotations(self, canvas_result):
         if len(canvas_result.json_data["objects"]) > 0:
