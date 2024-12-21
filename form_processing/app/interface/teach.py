@@ -371,49 +371,193 @@ class TemplateTeachingInterface:
     #                             st.session_state.current_sections.pop(i)
     #                             st.experimental_rerun()
 
-
     def render_canvas(self, current_image):
-        """Render the annotation canvas with proper error handling"""
-        try:
-            # Convert numpy array to PIL Image if needed
-            if isinstance(current_image, np.ndarray):
-                current_image = Image.fromarray(current_image)
+            """Render the annotation canvas with point selection mode"""
+            try:
+                # Convert numpy array to PIL Image if needed
+                if isinstance(current_image, np.ndarray):
+                    current_image = Image.fromarray(current_image)
                 
-            # Get image dimensions
-            img_width = current_image.width
-            img_height = current_image.height
-            
-            # Scale down if image is too large
-            max_width = 1000
-            if img_width > max_width:
-                scale_factor = max_width / img_width
-                img_width = max_width
-                img_height = int(img_height * scale_factor)
-                current_image = current_image.resize((img_width, img_height))
+                # Get image dimensions
+                img_width = current_image.width
+                img_height = current_image.height
+                
+                # Scale down if image is too large
+                max_width = 1000
+                if img_width > max_width:
+                    scale_factor = max_width / img_width
+                    img_width = max_width
+                    img_height = int(img_height * scale_factor)
+                    current_image = current_image.resize((img_width, img_height))
 
-            # First display the image
-            st.image(current_image, use_column_width=True)
+                # Display the image
+                st.image(current_image, use_column_width=True)
+
+                # Selection mode
+                selection_mode = st.radio(
+                    "Selection Mode",
+                    ["Draw Rectangle", "Click Points (4-point)"],
+                    horizontal=True
+                )
+
+                if selection_mode == "Draw Rectangle":
+                    # Regular rectangle drawing canvas
+                    canvas_result = st_canvas(
+                        background_color="rgba(255, 255, 255, 0)",
+                        fill_color="rgba(255, 165, 0, 0.3)",
+                        stroke_width=2,
+                        stroke_color="#e00",
+                        background_image=current_image,
+                        drawing_mode="rect",
+                        key=f"canvas_rect_{st.session_state.current_page}",
+                        width=img_width,
+                        height=img_height,
+                        display_toolbar=True,
+                    )
+                    
+                    return {"mode": "rectangle", "result": canvas_result}
+                
+                else:
+                    # Point selection canvas
+                    if 'points' not in st.session_state:
+                        st.session_state.points = []
+
+                    # Clear points button
+                    if st.button("Clear Points"):
+                        st.session_state.points = []
+                        st.experimental_rerun()
+
+                    # Point selection canvas
+                    point_canvas = st_canvas(
+                        background_color="rgba(255, 255, 255, 0)",
+                        fill_color="#ff0000",
+                        stroke_width=3,
+                        stroke_color="#ff0000",
+                        background_image=current_image,
+                        drawing_mode="point",
+                        point_display_radius=3,
+                        key=f"canvas_point_{st.session_state.current_page}",
+                        width=img_width,
+                        height=img_height,
+                    )
+
+                    # Handle point selection
+                    if point_canvas.json_data and point_canvas.json_data.get("objects"):
+                        latest_point = point_canvas.json_data["objects"][-1]
+                        if latest_point not in st.session_state.points:
+                            st.session_state.points.append(latest_point)
+
+                    # Show selected points
+                    if st.session_state.points:
+                        st.write(f"Selected {len(st.session_state.points)}/4 points")
+                        
+                        # Create section button appears when 4 points are selected
+                        if len(st.session_state.points) == 4:
+                            if st.button("Create Section from Points"):
+                                # Convert points to rectangle
+                                x_coords = [p['left'] for p in st.session_state.points]
+                                y_coords = [p['top'] for p in st.session_state.points]
+                                
+                                # Create rectangle from points
+                                rect = {
+                                    "left": min(x_coords),
+                                    "top": min(y_coords),
+                                    "width": max(x_coords) - min(x_coords),
+                                    "height": max(y_coords) - min(y_coords)
+                                }
+                                
+                                # Clear points for next selection
+                                st.session_state.points = []
+                                
+                                return {"mode": "points", "result": {"json_data": {"objects": [rect]}}}
+                    
+                    return {"mode": "points", "result": None}
+
+            except Exception as e:
+                st.error(f"Error setting up annotation canvas: {str(e)}")
+                return None
+
+        def handle_annotations(self, canvas_data):
+            """Handle annotations from both rectangle and point selection modes"""
+            if not canvas_data:
+                return
+
+            mode = canvas_data["mode"]
+            canvas_result = canvas_data["result"]
+
+            if canvas_result and canvas_result.json_data:
+                objects = canvas_result.json_data.get("objects", [])
+                if objects:
+                    with st.form("section_properties"):
+                        st.subheader("Add Section")
+                        section_name = st.text_input("Section Name")
+                        section_type = st.selectbox(
+                            "Section Type",
+                            ["SIP Details", "OTM Section", "Transaction Type", "Other"]
+                        )
+                        
+                        if st.form_submit_button("Add Section"):
+                            if not section_name:
+                                st.warning("Please enter a section name")
+                                return
+
+                            rect = objects[-1]
+                            new_section = {
+                                "name": section_name,
+                                "type": section_type,
+                                "coordinates": {
+                                    "x": rect["left"] / canvas_result.width,
+                                    "y": rect["top"] / canvas_result.height,
+                                    "width": rect["width"] / canvas_result.width,
+                                    "height": rect["height"] / canvas_result.height
+                                },
+                                "page": st.session_state.current_page
+                            }
+                            st.session_state.current_sections.append(new_section)
+                            st.success(f"Added section: {section_name}")
+                            
+    # def render_canvas(self, current_image):
+    #     """Render the annotation canvas with proper error handling"""
+    #     try:
+    #         # Convert numpy array to PIL Image if needed
+    #         if isinstance(current_image, np.ndarray):
+    #             current_image = Image.fromarray(current_image)
+                
+    #         # Get image dimensions
+    #         img_width = current_image.width
+    #         img_height = current_image.height
             
-            # Then create canvas with the same dimensions
-            canvas_result = st_canvas(
-                background_color="rgba(255, 255, 255, 0)",  # Transparent background
-                fill_color="rgba(255, 165, 0, 0.3)",      # Semi-transparent orange
-                stroke_width=2,
-                stroke_color="#e00",
-                background_image=current_image,
-                drawing_mode="rect",
-                key=f"canvas_{st.session_state.current_page}_{datetime.now().timestamp()}",  # Unique key
-                width=img_width,
-                height=img_height,
-                display_toolbar=True,
-            )
+    #         # Scale down if image is too large
+    #         max_width = 1000
+    #         if img_width > max_width:
+    #             scale_factor = max_width / img_width
+    #             img_width = max_width
+    #             img_height = int(img_height * scale_factor)
+    #             current_image = current_image.resize((img_width, img_height))
+
+    #         # First display the image
+    #         st.image(current_image, use_column_width=True)
             
-            return canvas_result
+    #         # Then create canvas with the same dimensions
+    #         canvas_result = st_canvas(
+    #             background_color="rgba(255, 255, 255, 0)",  # Transparent background
+    #             fill_color="rgba(255, 165, 0, 0.3)",      # Semi-transparent orange
+    #             stroke_width=2,
+    #             stroke_color="#e00",
+    #             background_image=current_image,
+    #             drawing_mode="rect",
+    #             key=f"canvas_{st.session_state.current_page}_{datetime.now().timestamp()}",  # Unique key
+    #             width=img_width,
+    #             height=img_height,
+    #             display_toolbar=True,
+    #         )
             
-        except Exception as e:
-            st.error(f"Error setting up annotation canvas: {str(e)}")
-            st.error("Please try uploading the file again or contact support.")
-            return None
+    #         return canvas_result
+            
+    #     except Exception as e:
+    #         st.error(f"Error setting up annotation canvas: {str(e)}")
+    #         st.error("Please try uploading the file again or contact support.")
+    #         return None
 
     # def render(self):
     #         st.title("Template Teaching Interface")
