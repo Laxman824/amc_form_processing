@@ -1,4 +1,6 @@
 poppler-utils
 tesseract-ocr
-python3-opencv
+tesseract-ocr-eng
 libgl1
+ghostscript
+python3-tk

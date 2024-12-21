@@ -10,3 +10,8 @@ easyocr>=1.7.1
 pandas>=2.0.0
 pydantic>=2.0.0
 regex>=2023.0.0
+
+
+pdf2image>=1.16.3
+PyMuPDF>=1.23.8  # More robust PDF handling
+
