@@ -673,8 +673,253 @@
 #                     if st.button("Remove", key=f"remove_{i}"):
 #                         st.session_state.current_sections.pop(i)
 #                         st.experimental_rerun()
+
+# import streamlit as st
+# # from streamlit_cropper import st_cropper
+# from streamlit_cropperjs import st_cropperjs
+# import numpy as np
+# from PIL import Image, ImageDraw
+# import logging
+# from pathlib import Path
+# from datetime import datetime
+# import json
+# import io
+# from ..utils.pdf import pdf_to_images, is_valid_pdf
+
+# class TemplateTeachingInterface:
+#     def __init__(self):
+#         self.setup_logging()
+#         self.initialize_session_state()
+
+#     def setup_logging(self):
+#         self.logger = logging.getLogger(__name__)
+
+#     def initialize_session_state(self):
+#         if 'current_page' not in st.session_state:
+#             st.session_state.current_page = 0
+#         if 'pages' not in st.session_state:
+#             st.session_state.pages = []
+#         if 'current_sections' not in st.session_state:
+#             st.session_state.current_sections = []
+#         if 'current_image' not in st.session_state:
+#             st.session_state.current_image = None
+
+#     def process_uploaded_file(self, uploaded_file):
+#         try:
+#             if uploaded_file.type == "application/pdf":
+#                 self.logger.info("Processing PDF file")
+#                 with st.spinner("Processing PDF file..."):
+#                     pdf_bytes = uploaded_file.read()
+#                     images = pdf_to_images(pdf_bytes)
+#                     if images:
+#                         st.success(f"Successfully loaded {len(images)} pages")
+#                         return images
+#                     else:
+#                         st.error("Failed to process PDF")
+#                         return None
+#             else:
+#                 image = Image.open(uploaded_file)
+#                 return [np.array(image)]
+#         except Exception as e:
+#             self.logger.error(f"Error processing file: {str(e)}")
+#             st.error(f"Error processing file: {str(e)}")
+#             return None
+
+#     def draw_existing_sections(self, image):
+#         """Draw existing sections on image"""
+#         img_draw = ImageDraw.Draw(image)
+        
+#         # Draw all sections for current page
+#         for section in st.session_state.current_sections:
+#             if section['page'] == st.session_state.current_page:
+#                 coords = section['coordinates']
+#                 x1 = int(coords['x'] * image.width)
+#                 y1 = int(coords['y'] * image.height)
+#                 x2 = int((coords['x'] + coords['width']) * image.width)
+#                 y2 = int((coords['y'] + coords['height']) * image.height)
+                
+#                 # Draw rectangle for section
+#                 img_draw.rectangle([x1, y1, x2, y2], 
+#                                 outline='red', 
+#                                 width=2)
+#                 # Draw section name
+#                 img_draw.text((x1, y1-20), 
+#                             section['name'], 
+#                             fill='red')
+#         return image
+
+#     def render_section_selection(self, image):
+#         """Render section selection using streamlit-cropper"""
+#         if isinstance(image, np.ndarray):
+#             image = Image.fromarray(image)
+
+#         # Draw existing sections on image
+#         image_with_sections = self.draw_existing_sections(image.copy())
+        
+#         st.markdown("### Select Section")
+#         st.caption("Drag to select the section area")
+
+#         # Use streamlit-cropper for section selection
+#         cropped_img = st_cropperjs(
+#             image_with_sections,
+#             realtime_update=True,
+#             box_color='red',
+#             aspect_ratio=None,
+#             return_type='box',
+#             key=f"cropper_{st.session_state.current_page}"
+#         )
+
+#         # Show section properties form when area is selected
+#         if cropped_img and isinstance(cropped_img, dict):
+#             with st.form("section_properties"):
+#                 st.markdown("### Section Details")
+                
+#                 # Calculate relative coordinates
+#                 coords = {
+#                     "x": cropped_img['left'] / image.width,
+#                     "y": cropped_img['top'] / image.height,
+#                     "width": cropped_img['width'] / image.width,
+#                     "height": cropped_img['height'] / image.height
+#                 }
+
+#                 # Section properties
+#                 col1, col2 = st.columns(2)
+#                 with col1:
+#                     section_name = st.text_input("Section Name")
+#                 with col2:
+#                     section_type = st.selectbox(
+#                         "Section Type",
+#                         ["SIP Details", "OTM Section", "Transaction Type", "Other"]
+#                     )
+
+#                 # Add section button
+#                 if st.form_submit_button("Add Section"):
+#                     if not section_name:
+#                         st.error("Please enter a section name")
+#                     else:
+#                         new_section = {
+#                             "name": section_name,
+#                             "type": section_type,
+#                             "coordinates": coords,
+#                             "page": st.session_state.current_page
+#                         }
+#                         st.session_state.current_sections.append(new_section)
+#                         st.success(f"Added section: {section_name}")
+#                         st.experimental_rerun()
+
+#     def render_sections_list(self):
+#         """Render list of marked sections"""
+#         if st.session_state.current_sections:
+#             st.markdown("### Marked Sections")
+            
+#             # Group sections by page
+#             sections_by_page = {}
+#             for section in st.session_state.current_sections:
+#                 page = section['page']
+#                 if page not in sections_by_page:
+#                     sections_by_page[page] = []
+#                 sections_by_page[page].append(section)
+            
+#             # Display sections grouped by page
+#             for page in sorted(sections_by_page.keys()):
+#                 with st.expander(f"Page {page + 1}", expanded=(page == st.session_state.current_page)):
+#                     for i, section in enumerate(sections_by_page[page]):
+#                         cols = st.columns([3, 1])
+#                         with cols[0]:
+#                             st.write(f"• {section['name']} ({section['type']})")
+#                         with cols[1]:
+#                             if st.button("Remove", key=f"remove_{page}_{i}"):
+#                                 st.session_state.current_sections.remove(section)
+#                                 st.experimental_rerun()
+
+#     def render(self):
+#         st.title("Form Template Teaching")
+
+#         # Instructions
+#         with st.expander("How to Create Template", expanded=False):
+#             st.markdown("""
+#             ### Instructions:
+#             1. Upload your form (PDF or image)
+#             2. Drag to select sections on the form
+#             3. Name and categorize each section
+#             4. Save the template when done
+            
+#             **Tip**: Click and drag on the form to select sections
+#             """)
+
+#         # Main layout
+#         col1, col2 = st.columns([3, 1])
+
+#         with col1:
+#             uploaded_file = st.file_uploader(
+#                 "Upload a form template",
+#                 type=['pdf', 'png', 'jpg', 'jpeg']
+#             )
+
+#             if uploaded_file:
+#                 images = self.process_uploaded_file(uploaded_file)
+                
+#                 if images:
+#                     st.session_state.pages = images
+
+#                     # Page navigation for PDFs
+#                     if len(images) > 1:
+#                         st.markdown("### Page Navigation")
+#                         current_page = st.slider(
+#                             "Select Page",
+#                             0,
+#                             len(images) - 1,
+#                             st.session_state.current_page
+#                         )
+#                         st.session_state.current_page = current_page
+#                         st.write(f"Page {current_page + 1} of {len(images)}")
+
+#                     # Get current image
+#                     current_image = images[st.session_state.current_page]
+                    
+#                     # Show section selection interface
+#                     self.render_section_selection(current_image)
+
+#         with col2:
+#             # Template properties
+#             with st.form("template_properties"):
+#                 st.markdown("### Template Details")
+#                 template_name = st.text_input("Template Name")
+#                 form_type = st.selectbox(
+#                     "Form Type",
+#                     ["CA Form", "SIP Form", "Multiple SIP Form", "Other"]
+#                 )
+                
+#                 if st.form_submit_button("Save Template"):
+#                     if not template_name:
+#                         st.error("Please enter a template name")
+#                     elif not st.session_state.current_sections:
+#                         st.error("Please mark at least one section")
+#                     else:
+#                         try:
+#                             template_dir = Path("templates")
+#                             template_dir.mkdir(exist_ok=True)
+                            
+#                             template_data = {
+#                                 "name": template_name,
+#                                 "form_type": form_type,
+#                                 "sections": st.session_state.current_sections,
+#                                 "created_at": datetime.now().isoformat()
+#                             }
+                            
+#                             template_path = template_dir / f"{template_name.lower().replace(' ', '_')}.json"
+#                             with open(template_path, "w") as f:
+#                                 json.dump(template_data, f, indent=4)
+                            
+#                             st.success("Template saved successfully!")
+#                             st.session_state.current_sections = []
+#                             st.experimental_rerun()
+#                         except Exception as e:
+#                             st.error(f"Error saving template: {str(e)}")
+
+#             # Show marked sections
+#             self.render_sections_list()
 import streamlit as st
-# from streamlit_cropper import st_cropper
 from streamlit_cropperjs import st_cropperjs
 import numpy as np
 from PIL import Image, ImageDraw
@@ -726,6 +971,9 @@ class TemplateTeachingInterface:
 
     def draw_existing_sections(self, image):
         """Draw existing sections on image"""
+        if isinstance(image, np.ndarray):
+            image = Image.fromarray(image)
+        
         img_draw = ImageDraw.Draw(image)
         
         # Draw all sections for current page
@@ -745,43 +993,52 @@ class TemplateTeachingInterface:
                 img_draw.text((x1, y1-20), 
                             section['name'], 
                             fill='red')
-        return image
+
+        # Convert back to bytes for cropperjs
+        img_byte_arr = io.BytesIO()
+        image.save(img_byte_arr, format='PNG')
+        img_byte_arr = img_byte_arr.getvalue()
+        
+        return img_byte_arr
 
     def render_section_selection(self, image):
-        """Render section selection using streamlit-cropper"""
+        """Render section selection using cropperjs"""
         if isinstance(image, np.ndarray):
             image = Image.fromarray(image)
 
-        # Draw existing sections on image
-        image_with_sections = self.draw_existing_sections(image.copy())
+        # Convert image to bytes
+        img_byte_arr = io.BytesIO()
+        image.save(img_byte_arr, format='PNG')
+        img_byte_arr = img_byte_arr.getvalue()
+
+        # Draw existing sections
+        img_with_sections = self.draw_existing_sections(image)
         
         st.markdown("### Select Section")
-        st.caption("Drag to select the section area")
+        st.caption("Drag to select the section area, then click 'Mark Section'")
 
-        # Use streamlit-cropper for section selection
-        cropped_img = st_cropperjs(
-            image_with_sections,
-            realtime_update=True,
-            box_color='red',
-            aspect_ratio=None,
-            return_type='box',
+        # Use cropperjs for selection
+        cropped_area = st_cropperjs(
+            pic=img_with_sections,
+            btn_text="Mark Section",
             key=f"cropper_{st.session_state.current_page}"
         )
 
         # Show section properties form when area is selected
-        if cropped_img and isinstance(cropped_img, dict):
+        if cropped_area:
+            cropped_img = Image.open(io.BytesIO(cropped_area))
+            
+            # Calculate relative coordinates based on cropped area
+            coords = {
+                "x": cropped_img.info.get('cropX', 0) / image.width,
+                "y": cropped_img.info.get('cropY', 0) / image.height,
+                "width": cropped_img.info.get('cropWidth', 0) / image.width,
+                "height": cropped_img.info.get('cropHeight', 0) / image.height
+            }
+
             with st.form("section_properties"):
                 st.markdown("### Section Details")
                 
-                # Calculate relative coordinates
-                coords = {
-                    "x": cropped_img['left'] / image.width,
-                    "y": cropped_img['top'] / image.height,
-                    "width": cropped_img['width'] / image.width,
-                    "height": cropped_img['height'] / image.height
-                }
-
-                # Section properties
                 col1, col2 = st.columns(2)
                 with col1:
                     section_name = st.text_input("Section Name")
@@ -791,7 +1048,6 @@ class TemplateTeachingInterface:
                         ["SIP Details", "OTM Section", "Transaction Type", "Other"]
                     )
 
-                # Add section button
                 if st.form_submit_button("Add Section"):
                     if not section_name:
                         st.error("Please enter a section name")
@@ -807,7 +1063,6 @@ class TemplateTeachingInterface:
                         st.experimental_rerun()
 
     def render_sections_list(self):
-        """Render list of marked sections"""
         if st.session_state.current_sections:
             st.markdown("### Marked Sections")
             
@@ -839,11 +1094,10 @@ class TemplateTeachingInterface:
             st.markdown("""
             ### Instructions:
             1. Upload your form (PDF or image)
-            2. Drag to select sections on the form
-            3. Name and categorize each section
-            4. Save the template when done
-            
-            **Tip**: Click and drag on the form to select sections
+            2. Select sections by dragging on the form
+            3. Click 'Mark Section' when selection is ready
+            4. Name and categorize each section
+            5. Save the template when done
             """)
 
         # Main layout
