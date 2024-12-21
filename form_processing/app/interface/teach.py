@@ -423,7 +423,7 @@ from pathlib import Path
 from datetime import datetime
 import json
 
-from ..utils.pdf import pdf_to_images, check_pdf_support
+from ..utils.pdf import pdf_to_images, check_pdf_support,is_valid_pdf
 
 class TemplateTeachingInterface:
     def __init__(self):
