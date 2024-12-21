@@ -261,9 +261,52 @@ class ProcessingInterface:
                             for key, value in section_data['details'].items():
                                 st.write(f"- {key.replace('_', ' ').title()}: {value}")
 
+    def check_templates(self):
+            """Check available templates"""
+            template_dir = Path("templates")
+            if not template_dir.exists():
+                st.warning("No templates directory found. Please create templates first.")
+                st.info("Go to the Template Teaching Interface to create templates.")
+                return False
+
+            templates = list(template_dir.glob("*.json"))
+            if not templates:
+                st.warning("No templates found. Please create templates first.")
+                st.info("Steps to create templates:")
+                st.markdown("""
+                1. Go to Template Teaching Interface
+                2. Upload each type of form:
+                - CA Form
+                - SIP Form
+                - Multiple SIP Form
+                3. Mark required sections:
+                - SIP Details
+                - OTM Section
+                - Transaction Type
+                4. Save each template
+                """)
+                return False
+
+            # Show available templates
+            st.success(f"Found {len(templates)} templates:")
+            for template_path in templates:
+                try:
+                    with open(template_path, "r") as f:
+                        template = json.load(f)
+                    st.write(f"- {template['name']} ({template['form_type']})")
+                except Exception as e:
+                    st.error(f"Error reading template {template_path.name}: {e}")
+
+            return True
+
+
+
+
     def render(self):
         """Render processing interface"""
         st.title("Form Processing")
+        if not self.check_templates():
+            return
 
         # File upload section
         st.markdown("### Upload Forms")
