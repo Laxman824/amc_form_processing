@@ -413,6 +413,27 @@ class TemplateTeachingInterface:
     def setup_logging(self):
         self.logger = logging.getLogger(__name__)
 
+
+    def process_uploaded_file(self, uploaded_file):
+        try:
+            if uploaded_file.type == "application/pdf":
+                self.logger.info("Processing PDF file")
+                with st.spinner("Processing PDF file..."):
+                    pdf_bytes = uploaded_file.read()
+                    images = pdf_to_images(pdf_bytes)
+                    if images:
+                        st.success(f"Successfully loaded {len(images)} pages")
+                        return images
+                    else:
+                        st.error("Failed to process PDF")
+                        return None
+            else:
+                image = Image.open(uploaded_file)
+                return [np.array(image)]
+        except Exception as e:
+            st.error(f"Error processing file: {str(e)}")
+            return None
+
     def draw_points_on_image(self, image, points):
         """Draw points on image with numbers"""
         draw = ImageDraw.Draw(image)
