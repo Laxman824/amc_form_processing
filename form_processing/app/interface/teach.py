@@ -511,152 +511,140 @@ class TemplateTeachingInterface:
                 st.error(f"Error handling click: {str(e)}")
 
         return None
-
     def render_selection_interface(self, image):
-        """Render the section selection interface with reliable point selection"""
-        st.markdown("### Select Section Points")
+        """Render the section selection interface with draggable rectangle"""
+        st.markdown("### Mark Form Sections")
         
-        # Create a grid of clickable points over the image
-        # First display the image
-        display_width = 800
-        scale_factor = display_width / image.width
-        display_height = int(image.height * scale_factor)
-        
-        # Create copy of image for drawing
-        display_image = image.copy()
-        
-        # Draw existing points
-        if st.session_state.points:
-            draw = ImageDraw.Draw(display_image)
-            for i, point in enumerate(st.session_state.points):
-                x, y = point
-                # Draw red circle
-                draw.ellipse([x-5, y-5, x+5, y+5], fill='red', outline='white')
-                # Draw number
-                draw.text((x+7, y-7), str(i+1), fill='red', stroke_fill='white')
-        
-        col1, col2 = st.columns([4, 1])
-        
-        with col1:
-            # Display the image
-            st.image(display_image, width=display_width)
+        # Create canvas for section selection
+        canvas_result = st_canvas(
+            fill_color="rgba(255, 165, 0, 0.3)",  # Semi-transparent orange
+            stroke_width=2,
+            stroke_color="#FF0000",  # Red border
+            background_image=image,
+            drawing_mode="rect",
+            update_streamlit=True,
+            key=f"canvas_{st.session_state.current_page}",
+            width=image.width,
+            height=image.height,
+            display_toolbar=True,
+        )
+
+        # Show section properties when a rectangle is drawn
+        if canvas_result.json_data is not None and len(canvas_result.json_data["objects"]) > 0:
+            # Get the last drawn rectangle
+            rect = canvas_result.json_data["objects"][-1]
             
-            # Create a grid of invisible buttons over the image
-            num_rows = 10
-            num_cols = 10
-            
-            # Calculate grid cell size
-            cell_width = image.width / num_cols
-            cell_height = image.height / num_rows
-            
-            # Create grid of buttons
-            for row in range(num_rows):
-                cols = st.columns(num_cols)
-                for col in range(num_cols):
-                    with cols[col]:
-                        # Create an invisible button
-                        if st.button("", key=f"btn_{row}_{col}", help="Click to add point"):
-                            # Calculate actual coordinates
-                            x = int((col + 0.5) * cell_width)
-                            y = int((row + 0.5) * cell_height)
-                            
-                            if len(st.session_state.points) < 4:
-                                st.session_state.points.append((x, y))
-                                st.experimental_rerun()
-        
-        with col2:
-            st.write(f"Points: {len(st.session_state.points)}/4")
-            if st.button("Clear Points"):
-                st.session_state.points = []
-                st.experimental_rerun()
-            
-            # Show create section button when 4 points are selected
-            if len(st.session_state.points) == 4:
-                if st.button("Create Section", type="primary"):
-                    x_coords = [p[0] for p in st.session_state.points]
-                    y_coords = [p[1] for p in st.session_state.points]
-                    
-                    section = {
-                        "x": min(x_coords) / image.width,
-                        "y": min(y_coords) / image.height,
-                        "width": (max(x_coords) - min(x_coords)) / image.width,
-                        "height": (max(y_coords) - min(y_coords)) / image.height
-                    }
-                    
-                    # Show section properties form
-                    st.session_state.show_section_form = True
-                    st.session_state.temp_section = section
-                    st.experimental_rerun()
-            
-            elif len(st.session_state.points) < 4:
-                points_left = 4 - len(st.session_state.points)
-                st.info(f"Select {points_left} more point{'s' if points_left > 1 else ''}")
-        
-        # Show section properties form if needed
-        if st.session_state.get('show_section_form', False):
-            with st.form("section_properties"):
-                st.subheader("Add Section")
-                section_name = st.text_input("Section Name")
-                section_type = st.selectbox(
-                    "Section Type",
-                    ["SIP Details", "OTM Section", "Transaction Type", "Other"]
-                )
+            with st.form(key="section_form"):
+                st.markdown("### Add Section Details")
                 
-                if st.form_submit_button("Save Section"):
-                    if section_name:
+                # Section name and type
+                col1, col2 = st.columns(2)
+                with col1:
+                    section_name = st.text_input("Section Name")
+                with col2:
+                    section_type = st.selectbox(
+                        "Section Type",
+                        ["SIP Details", "OTM Section", "Transaction Type", "Other"]
+                    )
+                
+                # Calculate relative coordinates
+                relative_coords = {
+                    "x": rect["left"] / canvas_result.width,
+                    "y": rect["top"] / canvas_result.height,
+                    "width": rect["width"] / canvas_result.width,
+                    "height": rect["height"] / canvas_result.height
+                }
+                
+                # Add section button
+                if st.form_submit_button("Add Section"):
+                    if not section_name:
+                        st.error("Please enter a section name")
+                    else:
                         new_section = {
                             "name": section_name,
                             "type": section_type,
-                            "coordinates": st.session_state.temp_section,
+                            "coordinates": relative_coords,
                             "page": st.session_state.current_page
                         }
                         st.session_state.current_sections.append(new_section)
-                        # Clear temporary data
-                        st.session_state.points = []
-                        st.session_state.show_section_form = False
-                        if 'temp_section' in st.session_state:
-                            del st.session_state.temp_section
                         st.success(f"Added section: {section_name}")
+                        # Clear the canvas
+                        canvas_result.json_data = {"objects": []}
                         st.experimental_rerun()
-                    else:
-                        st.error("Please enter a section name")
 
     def render(self):
-        """Main render method"""
-        st.title("Form Template Teaching")
+        """Main render method for template teaching interface"""
+        st.title("Form Template Teaching Interface")
 
+        # Instructions
+        with st.expander("How to Mark Sections", expanded=True):
+            st.markdown("""
+            ### Instructions:
+            1. Draw a rectangle around the section you want to mark
+            2. Adjust the rectangle position and size if needed
+            3. Enter section name and type
+            4. Click 'Add Section' to save
+            """)
+
+        # File upload
         uploaded_file = st.file_uploader(
             "Upload a form template",
             type=['pdf', 'png', 'jpg', 'jpeg']
         )
 
         if uploaded_file:
-            # Process file
-            images = self.process_uploaded_file(uploaded_file)
+            col1, col2 = st.columns([3, 1])
             
-            if images:
-                st.session_state.pages = images
+            with col1:
+                # Process file
+                images = self.process_uploaded_file(uploaded_file)
+                
+                if images:
+                    st.session_state.pages = images
 
-                # Page navigation for PDFs
-                if len(images) > 1:
-                    current_page = st.slider(
-                        "Select Page",
-                        0,
-                        len(images) - 1,
-                        st.session_state.current_page
-                    )
-                    st.session_state.current_page = current_page
+                    # Page navigation for PDFs
+                    if len(images) > 1:
+                        st.markdown("### Page Navigation")
+                        current_page = st.slider(
+                            "Select Page",
+                            0,
+                            len(images) - 1,
+                            st.session_state.current_page
+                        )
+                        st.session_state.current_page = current_page
+                        st.write(f"Page {current_page + 1} of {len(images)}")
 
-                # Get current image
-                current_image = images[st.session_state.current_page]
-                if isinstance(current_image, np.ndarray):
-                    current_image = Image.fromarray(current_image)
+                    # Get current image
+                    current_image = images[st.session_state.current_page]
+                    if isinstance(current_image, np.ndarray):
+                        current_image = Image.fromarray(current_image)
 
-                # Show selection interface
-                self.render_selection_interface(current_image)
+                    # Show selection interface
+                    self.render_selection_interface(current_image)
 
+            with col2:
                 # Show marked sections
-                self.render_sections_list()
+                if st.session_state.current_sections:
+                    st.markdown("### Marked Sections")
+                    for i, section in enumerate(st.session_state.current_sections):
+                        with st.expander(f"{section['name']} (Page {section['page'] + 1})", expanded=True):
+                            st.write(f"Type: {section['type']}")
+                            if st.button("Remove", key=f"remove_{i}"):
+                                st.session_state.current_sections.pop(i)
+                                st.experimental_rerun()
+                
+                # Template saving
+                st.markdown("### Save Template")
+                with st.form("save_template"):
+                    template_name = st.text_input("Template Name")
+                    if st.form_submit_button("Save Template"):
+                        if not template_name:
+                            st.error("Please enter a template name")
+                        elif not st.session_state.current_sections:
+                            st.error("Please mark at least one section")
+                        else:
+                            self.save_template(template_name)
+                            st.success(f"Template '{template_name}' saved!")
 
     def render_sections_list(self):
         """Render the list of marked sections"""
