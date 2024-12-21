@@ -384,7 +384,7 @@
 #         template_path = template_dir / f"{template_name.lower().replace(' ', '_')}.json"
 #         with open(template_path, "w") as f:
 #             json.dump(template_data, f, indent=4)
-
+#above code is for rectangle section taking and draw 4 points but not working so 
 import streamlit as st
 from PIL import Image, ImageDraw
 import numpy as np
@@ -410,6 +410,8 @@ class TemplateTeachingInterface:
             st.session_state.points = []
         if 'current_image' not in st.session_state:
             st.session_state.current_image = None
+    def setup_logging(self):
+        self.logger = logging.getLogger(__name__)
 
     def draw_points_on_image(self, image, points):
         """Draw points on image with numbers"""
