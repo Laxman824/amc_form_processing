@@ -45,48 +45,25 @@ class ProcessingInterface:
             self.logger.error(f"Error processing PDF: {e}")
             raise
 
-    # def process_file(self, uploaded_file) -> Dict:
-    #     """Process uploaded file"""
-    #     try:
-    #         # Convert to images
-    #         if uploaded_file.type == "application/pdf":
-    #             pdf_bytes = uploaded_file.read()
-    #             images = self.process_pdf(pdf_bytes)
-    #         else:
-    #             image = Image.open(uploaded_file)
-    #             images = [np.array(image)]
-
-    #         if not images:
-    #             return {
-    #                 'status': 'error',
-    #                 'message': 'Failed to extract images from file'
-    #             }
-
-    #         # Process form
-    #         results = self.processor.process_form(images)
-    #         return results
-
-    #     except Exception as e:
-    #         self.logger.error(f"Error processing file: {e}")
-    #         return {
-    #             'status': 'error',
-    #             'message': str(e)
-    #         }
     def process_file(self, uploaded_file) -> Dict:
         """Process uploaded file"""
         try:
+            # Convert to images
             if uploaded_file.type == "application/pdf":
-                # For PDFs, pass the bytes directly to the processor
                 pdf_bytes = uploaded_file.read()
-                results = self.processor.process_form([pdf_bytes], file_type='pdf')
+                images = self.process_pdf(pdf_bytes)
             else:
-                # For images, convert to numpy array
                 image = Image.open(uploaded_file)
-                image_array = np.array(image)
-                if image_array is None or image_array.size == 0:
-                    raise ValueError("Invalid image file")
-                results = self.processor.process_form([image_array], file_type='image')
+                images = [np.array(image)]
 
+            if not images:
+                return {
+                    'status': 'error',
+                    'message': 'Failed to extract images from file'
+                }
+
+            # Process form
+            results = self.processor.process_form(images)
             return results
 
         except Exception as e:
@@ -95,6 +72,7 @@ class ProcessingInterface:
                 'status': 'error',
                 'message': str(e)
             }
+
     def display_results(self, results: Dict, filename: str):
         """Display processing results"""
         st.markdown(f"### Results for {filename}")
