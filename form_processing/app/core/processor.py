@@ -2,8 +2,9 @@ import cv2
 import numpy as np
 from pathlib import Path
 import logging
-from typing import Dict, List, Optional
+from typing import Tuple,Dict, List, Optional
 from PIL import Image
+
 
 from .detector import FormDetector
 from .validator import SectionValidator
