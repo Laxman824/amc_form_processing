@@ -138,7 +138,6 @@
 #             self.logger.error(f"Error in form detection: {e}")
 #             return "Error", 0.0
 
-
 import json
 from pathlib import Path
 import numpy as np
@@ -150,9 +149,21 @@ from typing import Dict, List, Optional, Tuple
 class FormDetector:
     def __init__(self, template_dir: Path = Path("templates")):
         self.template_dir = template_dir
+        self.setup_logging()  # Setup logging first
         self.templates = self._load_templates()
+        self.confidence_threshold = 0.5
+
+    def setup_logging(self):
+        """Setup logging configuration"""
         self.logger = logging.getLogger(__name__)
-        self.confidence_threshold = 0.5  # Lowered threshold
+        if not self.logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter(
+                '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+            )
+            handler.setFormatter(formatter)
+            self.logger.addHandler(handler)
+            self.logger.setLevel(logging.INFO)
 
     def _load_templates(self) -> Dict:
         """Load all saved templates"""
@@ -189,11 +200,9 @@ class FormDetector:
                     page_confidence = self._match_page_sections(image, sections)
                     total_confidence += page_confidence
                     sections_checked += len(sections)
-            
+
             # Calculate average confidence
-            if sections_checked > 0:
-                return total_confidence / sections_checked
-            return 0.0
+            return total_confidence / sections_checked if sections_checked > 0 else 0.0
             
         except Exception as e:
             self.logger.error(f"Error in match_template: {e}")
@@ -217,14 +226,10 @@ class FormDetector:
                 x2, y2 = min(width, x2), min(height, y2)
                 
                 if x2 > x1 and y2 > y1:  # Valid section size
-                    # Extract section
                     section_img = image[y1:y2, x1:x2]
-                    
-                    # Convert to grayscale if needed
                     if len(section_img.shape) == 3:
                         section_img = cv2.cvtColor(section_img, cv2.COLOR_BGR2GRAY)
                     
-                    # Match features
                     feature_score = self._match_features(section_img)
                     total_score += feature_score
                     
@@ -307,7 +312,6 @@ class FormDetector:
                     best_confidence = confidence
                     best_match = template_data['form_type']
             
-            # Use lower threshold since we're checking all pages
             if best_confidence > self.confidence_threshold:
                 self.logger.info(f"Found match: {best_match} ({best_confidence:.2%})")
                 return best_match, best_confidence
