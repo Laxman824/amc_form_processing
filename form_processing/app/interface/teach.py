@@ -497,34 +497,32 @@ class TemplateTeachingInterface:
         st.markdown("### Select Section")
         st.caption("Drag to select the section area, then click 'Mark Section'")
 
-        # Use cropperjs for selection with aspect ratio unlocked
+        # Use cropperjs for selection with minimal parameters
         cropped_area = st_cropperjs(
             pic=img_with_sections,
             btn_text="Mark Section",
-            key=f"cropper_{st.session_state.current_page}",
-            aspect_ratio=None,  # Allow free aspect ratio
-            box_color='red',
-            realtime_update=True
+            key=f"cropper_{st.session_state.current_page}"
         )
 
         # Show section properties form when area is selected
         if cropped_area is not None:
             try:
-                # Convert the cropped area to PIL Image
+                # Convert the cropped area to PIL Image and get its data
                 cropped_img = Image.open(io.BytesIO(cropped_area))
                 
-                # Get the original image dimensions
+                # Get image dimensions
                 img_width = image.width
                 img_height = image.height
 
-                # Get the JSON data from the cropped image
-                crop_data = json.loads(cropped_img.info.get('cropperjs', '{}'))
-                
-                # Get the crop box data
-                x = float(crop_data.get('x', 0))
-                y = float(crop_data.get('y', 0))
-                width = float(crop_data.get('width', 0))
-                height = float(crop_data.get('height', 0))
+                # Get dimensions from the cropped image
+                cropped_width = cropped_img.width
+                cropped_height = cropped_img.height
+
+                # Calculate coordinates based on the difference
+                x = max(0, min(img_width - cropped_width, int(cropped_img.info.get('x', 0))))
+                y = max(0, min(img_height - cropped_height, int(cropped_img.info.get('y', 0))))
+                width = min(cropped_width, img_width - x)
+                height = min(cropped_height, img_height - y)
 
                 # Calculate relative coordinates (0-1)
                 coords = {
@@ -535,10 +533,7 @@ class TemplateTeachingInterface:
                 }
 
                 # Create section preview
-                preview_img = image.crop((
-                    int(x), int(y),
-                    int(x + width), int(y + height)
-                ))
+                preview_img = image.crop((x, y, x + width, y + height))
 
                 col1, col2 = st.columns([2, 1])
                 with col1:
@@ -557,10 +552,11 @@ class TemplateTeachingInterface:
 
                         # Debug information
                         with st.expander("Debug Info"):
-                            st.write("Raw Crop Data:", crop_data)
                             st.write("Image Size:", (img_width, img_height))
+                            st.write("Cropped Size:", (cropped_width, cropped_height))
                             st.write("Absolute Coordinates:", (x, y, width, height))
                             st.write("Relative Coordinates:", coords)
+                            st.write("Cropped Image Info:", cropped_img.info)
 
                         if st.form_submit_button("Add Section"):
                             if not section_name:
@@ -587,8 +583,19 @@ class TemplateTeachingInterface:
                 st.error(f"Error processing selection: {str(e)}")
                 st.write("Debug info:")
                 st.write("Cropped area type:", type(cropped_area))
-                st.write("Cropped area content:", cropped_area[:100] if cropped_area else None)  # Show first 100 bytes
-
+                if isinstance(cropped_area, bytes):
+                    st.write("Cropped area length:", len(cropped_area))
+                    # Try to extract image info
+                    try:
+                        test_img = Image.open(io.BytesIO(cropped_area))
+                        st.write("Image details:", {
+                            "size": test_img.size,
+                            "mode": test_img.mode,
+                            "format": test_img.format,
+                            "info": test_img.info
+                        })
+                    except Exception as img_error:
+                        st.write("Error reading image:", str(img_error))
 
     def render_sections_list(self):
         if st.session_state.current_sections:
