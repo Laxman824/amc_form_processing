@@ -410,36 +410,35 @@ class TemplateTeachingInterface:
         st.caption("Drag to select the section area, then click 'Mark Section'")
 
         # Use cropperjs for selection
-        crop_data = st_cropperjs(
+        cropped_area = st_cropperjs(
             pic=img_with_sections,
             btn_text="Mark Section",
-            key=f"cropper_{st.session_state.current_page}",
-            returntype='dict'  # Important: get crop data as dictionary
+            key=f"cropper_{st.session_state.current_page}"
         )
 
         # Show section properties form when area is selected
-        if crop_data and isinstance(crop_data, dict):
-            # Get coordinates from crop data
-            coords = {
-                "x": float(crop_data.get('x', 0)) / image.width,
-                "y": float(crop_data.get('y', 0)) / image.height,
-                "width": float(crop_data.get('width', 0)) / image.width,
-                "height": float(crop_data.get('height', 0)) / image.height
-            }
-            
-            # Ensure coordinates are within bounds and valid
-            coords = {k: max(0.0, min(1.0, v)) for k, v in coords.items()}
-            
-            # Only proceed if we have valid coordinates
-            if any(v > 0 for v in coords.values()):
-                # Create preview of selected area
-                preview_img = image.crop((
-                    int(coords["x"] * image.width),
-                    int(coords["y"] * image.height),
-                    int((coords["x"] + coords["width"]) * image.width),
-                    int((coords["y"] + coords["height"]) * image.height)
-                ))
+        if cropped_area:
+            # Get the cropped image
+            try:
+                cropped_img = Image.open(io.BytesIO(cropped_area))
+                
+                # Get crop data from image info
+                x = int(cropped_img.info.get('cropX', 0))
+                y = int(cropped_img.info.get('cropY', 0))
+                width = int(cropped_img.info.get('cropWidth', 0))
+                height = int(cropped_img.info.get('cropHeight', 0))
+                
+                # Calculate relative coordinates
+                coords = {
+                    "x": x / image.width if image.width else 0,
+                    "y": y / image.height if image.height else 0,
+                    "width": width / image.width if image.width else 0,
+                    "height": height / image.height if image.height else 0
+                }
 
+                # Create preview
+                preview_img = image.crop((x, y, x + width, y + height))
+                
                 col1, col2 = st.columns([2, 1])
                 with col1:
                     with st.form("section_properties"):
@@ -457,9 +456,9 @@ class TemplateTeachingInterface:
 
                         # Debug information
                         with st.expander("Debug Info"):
-                            st.write("Raw Crop Data:", crop_data)
                             st.write("Image Size:", (image.width, image.height))
-                            st.write("Calculated Coordinates:", coords)
+                            st.write("Crop Coordinates:", (x, y, width, height))
+                            st.write("Relative Coordinates:", coords)
 
                         if st.form_submit_button("Add Section"):
                             if not section_name:
@@ -482,6 +481,11 @@ class TemplateTeachingInterface:
                         max_size = (300, 300)
                         preview_img.thumbnail(max_size)
                         st.image(preview_img, caption="Selected Area")
+
+            except Exception as e:
+                st.error(f"Error processing selection: {str(e)}")
+                st.write("Debug info:")
+                st.write("Cropped area type:", type(cropped_area))
                         
     def render_sections_list(self):
         if st.session_state.current_sections:
