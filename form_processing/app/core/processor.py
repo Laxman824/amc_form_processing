@@ -31,7 +31,8 @@ class FormProcessor:
             }
 
             # Detect form type from first page
-            form_type, confidence = self.detector.detect_form_type(images[0])
+            form_type, confidence = self.detector.detect_form_type(images)
+  
             results['form_type'] = form_type
             results['confidence'] = confidence
 
