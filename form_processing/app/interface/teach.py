@@ -410,71 +410,79 @@ class TemplateTeachingInterface:
         st.caption("Drag to select the section area, then click 'Mark Section'")
 
         # Use cropperjs for selection
-        cropped_area = st_cropperjs(
+        crop_data = st_cropperjs(
             pic=img_with_sections,
             btn_text="Mark Section",
-            key=f"cropper_{st.session_state.current_page}"
+            key=f"cropper_{st.session_state.current_page}",
+            returntype='dict'  # Important: get crop data as dictionary
         )
 
         # Show section properties form when area is selected
-        if cropped_area:
-            cropped_img = Image.open(io.BytesIO(cropped_area))
-            original_width = image.width
-            original_height = image.height
-            
-            # Get crop data
-            cropX = float(cropped_img.info.get('cropX', 0))
-            cropY = float(cropped_img.info.get('cropY', 0))
-            cropWidth = float(cropped_img.info.get('cropWidth', 0))
-            cropHeight = float(cropped_img.info.get('cropHeight', 0))
-            
-            # Calculate relative coordinates
+        if crop_data and isinstance(crop_data, dict):
+            # Get coordinates from crop data
             coords = {
-                "x": cropX / original_width,
-                "y": cropY / original_height,
-                "width": cropWidth / original_width,
-                "height": cropHeight / original_height
+                "x": float(crop_data.get('x', 0)) / image.width,
+                "y": float(crop_data.get('y', 0)) / image.height,
+                "width": float(crop_data.get('width', 0)) / image.width,
+                "height": float(crop_data.get('height', 0)) / image.height
             }
             
-            # Ensure coordinates are within bounds
+            # Ensure coordinates are within bounds and valid
             coords = {k: max(0.0, min(1.0, v)) for k, v in coords.items()}
+            
+            # Only proceed if we have valid coordinates
+            if any(v > 0 for v in coords.values()):
+                # Create preview of selected area
+                preview_img = image.crop((
+                    int(coords["x"] * image.width),
+                    int(coords["y"] * image.height),
+                    int((coords["x"] + coords["width"]) * image.width),
+                    int((coords["y"] + coords["height"]) * image.height)
+                ))
 
-            # Create preview
-            preview = self.create_section_preview(image, coords)
+                col1, col2 = st.columns([2, 1])
+                with col1:
+                    with st.form("section_properties"):
+                        st.markdown("### Section Details")
+                        section_name = st.text_input("Section Name")
+                        section_type = st.selectbox(
+                            "Section Type",
+                            ["SIP Details", "OTM Section", "Transaction Type", "Other"]
+                        )
 
-            col1, col2 = st.columns([2, 1])
-            with col1:
-                with st.form("section_properties"):
-                    st.markdown("### Section Details")
-                    section_name = st.text_input("Section Name")
-                    section_type = st.selectbox(
-                        "Section Type",
-                        ["SIP Details", "OTM Section", "Transaction Type", "Other"]
-                    )
+                        # Show coordinate information
+                        st.write("Selected Area:")
+                        st.write(f"- Location: ({coords['x']:.2%}, {coords['y']:.2%})")
+                        st.write(f"- Size: {coords['width']:.2%} × {coords['height']:.2%}")
 
-                    # Show coordinate information
-                    st.write("Selected Area:")
-                    st.write(f"- Location: ({coords['x']:.2%}, {coords['y']:.2%})")
-                    st.write(f"- Size: {coords['width']:.2%} × {coords['height']:.2%}")
+                        # Debug information
+                        with st.expander("Debug Info"):
+                            st.write("Raw Crop Data:", crop_data)
+                            st.write("Image Size:", (image.width, image.height))
+                            st.write("Calculated Coordinates:", coords)
 
-                    if st.form_submit_button("Add Section"):
-                        if not section_name:
-                            st.error("Please enter a section name")
-                        else:
-                            new_section = {
-                                "name": section_name,
-                                "type": section_type,
-                                "coordinates": coords,
-                                "page": st.session_state.current_page
-                            }
-                            st.session_state.current_sections.append(new_section)
-                            st.success(f"Added section: {section_name}")
-                            st.rerun()
+                        if st.form_submit_button("Add Section"):
+                            if not section_name:
+                                st.error("Please enter a section name")
+                            else:
+                                new_section = {
+                                    "name": section_name,
+                                    "type": section_type,
+                                    "coordinates": coords,
+                                    "page": st.session_state.current_page
+                                }
+                                st.session_state.current_sections.append(new_section)
+                                st.success(f"Added section: {section_name}")
+                                st.rerun()
 
-            with col2:
-                st.markdown("### Selection Preview")
-                st.image(preview, caption="Selected Area")
-
+                with col2:
+                    if preview_img:
+                        st.markdown("### Selection Preview")
+                        # Resize preview if too large
+                        max_size = (300, 300)
+                        preview_img.thumbnail(max_size)
+                        st.image(preview_img, caption="Selected Area")
+                        
     def render_sections_list(self):
         if st.session_state.current_sections:
             st.markdown("### Marked Sections")
