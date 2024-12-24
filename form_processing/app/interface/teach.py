@@ -409,36 +409,49 @@ class TemplateTeachingInterface:
         st.markdown("### Select Section")
         st.caption("Drag to select the section area, then click 'Mark Section'")
 
-        # Use cropperjs for selection
+        # Use cropperjs for selection with aspect ratio unlocked
         cropped_area = st_cropperjs(
             pic=img_with_sections,
             btn_text="Mark Section",
-            key=f"cropper_{st.session_state.current_page}"
+            key=f"cropper_{st.session_state.current_page}",
+            aspect_ratio=None,  # Allow free aspect ratio
+            box_color='red',
+            realtime_update=True
         )
 
         # Show section properties form when area is selected
-        if cropped_area:
-            # Get the cropped image
+        if cropped_area is not None:
             try:
+                # Convert the cropped area to PIL Image
                 cropped_img = Image.open(io.BytesIO(cropped_area))
                 
-                # Get crop data from image info
-                x = int(cropped_img.info.get('cropX', 0))
-                y = int(cropped_img.info.get('cropY', 0))
-                width = int(cropped_img.info.get('cropWidth', 0))
-                height = int(cropped_img.info.get('cropHeight', 0))
+                # Get the original image dimensions
+                img_width = image.width
+                img_height = image.height
+
+                # Get the JSON data from the cropped image
+                crop_data = json.loads(cropped_img.info.get('cropperjs', '{}'))
                 
-                # Calculate relative coordinates
+                # Get the crop box data
+                x = float(crop_data.get('x', 0))
+                y = float(crop_data.get('y', 0))
+                width = float(crop_data.get('width', 0))
+                height = float(crop_data.get('height', 0))
+
+                # Calculate relative coordinates (0-1)
                 coords = {
-                    "x": x / image.width if image.width else 0,
-                    "y": y / image.height if image.height else 0,
-                    "width": width / image.width if image.width else 0,
-                    "height": height / image.height if image.height else 0
+                    "x": x / img_width,
+                    "y": y / img_height,
+                    "width": width / img_width,
+                    "height": height / img_height
                 }
 
-                # Create preview
-                preview_img = image.crop((x, y, x + width, y + height))
-                
+                # Create section preview
+                preview_img = image.crop((
+                    int(x), int(y),
+                    int(x + width), int(y + height)
+                ))
+
                 col1, col2 = st.columns([2, 1])
                 with col1:
                     with st.form("section_properties"):
@@ -456,8 +469,9 @@ class TemplateTeachingInterface:
 
                         # Debug information
                         with st.expander("Debug Info"):
-                            st.write("Image Size:", (image.width, image.height))
-                            st.write("Crop Coordinates:", (x, y, width, height))
+                            st.write("Raw Crop Data:", crop_data)
+                            st.write("Image Size:", (img_width, img_height))
+                            st.write("Absolute Coordinates:", (x, y, width, height))
                             st.write("Relative Coordinates:", coords)
 
                         if st.form_submit_button("Add Section"):
@@ -475,18 +489,19 @@ class TemplateTeachingInterface:
                                 st.rerun()
 
                 with col2:
-                    if preview_img:
-                        st.markdown("### Selection Preview")
-                        # Resize preview if too large
-                        max_size = (300, 300)
-                        preview_img.thumbnail(max_size)
-                        st.image(preview_img, caption="Selected Area")
+                    st.markdown("### Selection Preview")
+                    # Resize preview if too large
+                    max_size = (300, 300)
+                    preview_img.thumbnail(max_size)
+                    st.image(preview_img, caption="Selected Section")
 
             except Exception as e:
                 st.error(f"Error processing selection: {str(e)}")
                 st.write("Debug info:")
                 st.write("Cropped area type:", type(cropped_area))
-                        
+                st.write("Cropped area content:", cropped_area[:100] if cropped_area else None)  # Show first 100 bytes
+                
+
     def render_sections_list(self):
         if st.session_state.current_sections:
             st.markdown("### Marked Sections")
