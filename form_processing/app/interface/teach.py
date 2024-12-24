@@ -163,7 +163,7 @@ class TemplateTeachingInterface:
                         with cols[1]:
                             if st.button("Remove", key=f"remove_{page}_{i}"):
                                 st.session_state.current_sections.remove(section)
-                                st.experimental_rerun()
+                                st.rerun()
 
     def render(self):
         st.title("Form Template Teaching")
@@ -245,7 +245,7 @@ class TemplateTeachingInterface:
                             
                             st.success("Template saved successfully!")
                             st.session_state.current_sections = []
-                            st.experimental_rerun()
+                            st.rerun()
                         except Exception as e:
                             st.error(f"Error saving template: {str(e)}")
 
@@ -295,7 +295,7 @@ class TemplateTeachingInterface:
                         if st.button("Delete Template", key=f"delete_{template_file.stem}"):
                             template_file.unlink()  # Delete the file
                             st.success("Template deleted!")
-                            st.experimental_rerun()
+                            st.rerun()
                             
                     except Exception as e:
                         st.error(f"Error reading template {template_file.name}: {str(e)}")
