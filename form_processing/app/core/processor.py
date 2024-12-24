@@ -234,47 +234,47 @@ class FormProcessor:
                 self.logger.error(f"Error validating section {section_type}: {e}")
                 return False, {'error': str(e)}
 
-        def validate_form(self, images: List[np.ndarray], template: Dict) -> Dict:
-            """Validate form against template"""
-            results = {
-                'status': 'success',
-                'sections': {},
-                'sip_details_filled': False,
-                'otm_details_filled': False
-            }
+    def validate_form(self, images: List[np.ndarray], template: Dict) -> Dict:
+        """Validate form against template"""
+        results = {
+            'status': 'success',
+            'sections': {},
+            'sip_details_filled': False,
+            'otm_details_filled': False
+        }
+        
+        try:
+            for section in template['sections']:
+                page_num = section['page']
+                if page_num < len(images):
+                    # Get section image
+                    section_img = self._extract_section(
+                        images[page_num],
+                        section['coordinates']
+                    )
+                    
+                    # Validate section
+                    is_valid, section_results = self._validate_section(
+                        section_img,
+                        section['type'],
+                        page_num
+                    )
+                    
+                    # Store results
+                    results['sections'][section['name']] = {
+                        'filled': is_valid,
+                        'details': section_results
+                    }
+                    
+                    # Update overall status
+                    if 'sip' in section['type'].lower():
+                        results['sip_details_filled'] |= is_valid
+                    elif 'otm' in section['type'].lower():
+                        results['otm_details_filled'] |= is_valid
+                        
+        except Exception as e:
+            self.logger.error(f"Error in form validation: {e}")
+            results['status'] = 'error'
+            results['message'] = str(e)
             
-            try:
-                for section in template['sections']:
-                    page_num = section['page']
-                    if page_num < len(images):
-                        # Get section image
-                        section_img = self._extract_section(
-                            images[page_num],
-                            section['coordinates']
-                        )
-                        
-                        # Validate section
-                        is_valid, section_results = self._validate_section(
-                            section_img,
-                            section['type'],
-                            page_num
-                        )
-                        
-                        # Store results
-                        results['sections'][section['name']] = {
-                            'filled': is_valid,
-                            'details': section_results
-                        }
-                        
-                        # Update overall status
-                        if 'sip' in section['type'].lower():
-                            results['sip_details_filled'] |= is_valid
-                        elif 'otm' in section['type'].lower():
-                            results['otm_details_filled'] |= is_valid
-                            
-            except Exception as e:
-                self.logger.error(f"Error in form validation: {e}")
-                results['status'] = 'error'
-                results['message'] = str(e)
-                
-            return results
+        return results
