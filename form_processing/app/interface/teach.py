@@ -398,6 +398,94 @@ class TemplateTeachingInterface:
         image.save(img_byte_arr, format='PNG')
         return img_byte_arr.getvalue()
 
+    # def render_section_selection(self, image):
+    #     """Render section selection using cropperjs"""
+    #     if isinstance(image, np.ndarray):
+    #         image = Image.fromarray(image)
+
+    #     # Draw existing sections
+    #     img_with_sections = self.draw_existing_sections(image)
+        
+    #     st.markdown("### Select Section")
+    #     st.caption("Drag to select the section area, then click 'Mark Section'")
+
+    #     # Use cropperjs for selection
+    #     cropped_area = st_cropperjs(
+    #         pic=img_with_sections,
+    #         btn_text="Mark Section",
+    #         key=f"cropper_{st.session_state.current_page}"
+    #     )
+
+    #     # Show section properties form when area is selected
+    #     if cropped_area:
+    #         # Get the cropped image
+    #         try:
+    #             cropped_img = Image.open(io.BytesIO(cropped_area))
+                
+    #             # Get crop data from image info
+    #             x = int(cropped_img.info.get('cropX', 0))
+    #             y = int(cropped_img.info.get('cropY', 0))
+    #             width = int(cropped_img.info.get('cropWidth', 0))
+    #             height = int(cropped_img.info.get('cropHeight', 0))
+                
+    #             # Calculate relative coordinates
+    #             coords = {
+    #                 "x": x / image.width if image.width else 0,
+    #                 "y": y / image.height if image.height else 0,
+    #                 "width": width / image.width if image.width else 0,
+    #                 "height": height / image.height if image.height else 0
+    #             }
+
+    #             # Create preview
+    #             preview_img = image.crop((x, y, x + width, y + height))
+                
+    #             col1, col2 = st.columns([2, 1])
+    #             with col1:
+    #                 with st.form("section_properties"):
+    #                     st.markdown("### Section Details")
+    #                     section_name = st.text_input("Section Name")
+    #                     section_type = st.selectbox(
+    #                         "Section Type",
+    #                         ["SIP Details", "OTM Section", "Transaction Type", "Other"]
+    #                     )
+
+    #                     # Show coordinate information
+    #                     st.write("Selected Area:")
+    #                     st.write(f"- Location: ({coords['x']:.2%}, {coords['y']:.2%})")
+    #                     st.write(f"- Size: {coords['width']:.2%} × {coords['height']:.2%}")
+
+    #                     # Debug information
+    #                     with st.expander("Debug Info"):
+    #                         st.write("Image Size:", (image.width, image.height))
+    #                         st.write("Crop Coordinates:", (x, y, width, height))
+    #                         st.write("Relative Coordinates:", coords)
+
+    #                     if st.form_submit_button("Add Section"):
+    #                         if not section_name:
+    #                             st.error("Please enter a section name")
+    #                         else:
+    #                             new_section = {
+    #                                 "name": section_name,
+    #                                 "type": section_type,
+    #                                 "coordinates": coords,
+    #                                 "page": st.session_state.current_page
+    #                             }
+    #                             st.session_state.current_sections.append(new_section)
+    #                             st.success(f"Added section: {section_name}")
+    #                             st.rerun()
+
+    #             with col2:
+    #                 if preview_img:
+    #                     st.markdown("### Selection Preview")
+    #                     # Resize preview if too large
+    #                     max_size = (300, 300)
+    #                     preview_img.thumbnail(max_size)
+    #                     st.image(preview_img, caption="Selected Area")
+
+    #         except Exception as e:
+    #             st.error(f"Error processing selection: {str(e)}")
+    #             st.write("Debug info:")
+    #             st.write("Cropped area type:", type(cropped_area))
     def render_section_selection(self, image):
         """Render section selection using cropperjs"""
         if isinstance(image, np.ndarray):
@@ -500,7 +588,7 @@ class TemplateTeachingInterface:
                 st.write("Debug info:")
                 st.write("Cropped area type:", type(cropped_area))
                 st.write("Cropped area content:", cropped_area[:100] if cropped_area else None)  # Show first 100 bytes
-                
+
 
     def render_sections_list(self):
         if st.session_state.current_sections:
