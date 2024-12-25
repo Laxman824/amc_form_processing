@@ -297,6 +297,7 @@ from .validators.base_validator import BaseSectionValidator
 from .validators.caf_validator import CAFValidator
 from .validators.sip_validator import SIPValidator
 from .validators.multiple_sip_validator import MultipleSIPValidator
+from .validators.ctf_validator import CTFValidator
 
 class FormProcessor:
     def __init__(self, template_dir: Path = Path("templates")):
