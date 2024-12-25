@@ -8,6 +8,7 @@ class FormType(Enum):
     CAF = "CA Form"
     SIP = "SIP Form"
     MULTIPLE_SIP = "Multiple SIP Form"
+    CTF Form = "CTF Form"
     OTHER = "Other"
 
 class ValidationStatus(Enum):
