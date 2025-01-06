@@ -1,3 +1,6 @@
+!pip install opencv-python tensorflow pytesseract numpy
+!apt-get install tesseract-ocr
+!apt-get install libtesseract-dev
 import cv2
 import numpy as np
 from scipy import stats
@@ -136,7 +139,7 @@ def main():
     
     try:
         # Process image
-        regions, image = detector.detect_handwriting('filled.png')
+        regions, image = detector.detect_handwriting('1.png')
         
         # Visualize results
         result = detector.visualize_results(image, regions)
