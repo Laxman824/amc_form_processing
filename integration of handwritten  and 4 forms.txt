@@ -1,0 +1,2695 @@
+# -*- coding: utf-8 -*-
+"""Welcome To Colab
+
+Integrate handwritten text detection to amc
+
+
+take help to update the file organization structure and improve the bounding box mapping. 
+"""
+
+#version2
+# Part 1: Setup and Base Classes
+# Installation commands for Google Colab
+!pip install opencv-python tensorflow pytesseract numpy
+!apt-get install tesseract-ocr
+!apt-get install libtesseract-dev
+!pip install easyocr
+!pip install pdf2image
+!apt-get install poppler-utils
+!pip install python-Levenshtein
+!apt-get install tesseract-ocr
+!pip install pytesseract
+!pip install torch torchvision torchaudio
+# Import required librariesa
+import os
+import logging
+from dataclasses import dataclass
+from typing import List, Dict, Optional, Tuple, Union
+import numpy as np
+import cv2
+from pdf2image import convert_from_path
+import easyocr
+import matplotlib.pyplot as plt
+from PIL import Image
+import re
+from datetime import datetime
+import Levenshtein  # Add this import
+from pathlib import Path
+from google.colab import files
+import pytesseract
+# Required imports
+
+from scipy import stats
+import torch
+
+
+def upload_and_save_file():
+    uploaded = files.upload()
+    for fn in uploaded.keys():
+        file_path = os.path.join('/content/', fn)  # Save to Colab content directory using os.path.join for better compatibility
+        with open(file_path, 'wb') as f:
+            f.write(uploaded[fn])
+        print(f'File "{fn}" uploaded and saved to "{file_path}"')
+        return file_path
+def display_results(results: Dict, images: List[np.ndarray]):
+    """Display validation results with visualizations"""
+    print("\n=== Form Validation Results ===")
+    print(f"Form Type: {results['form_type']}")
+    print(f"Total Pages: {results['results']['total_pages']}")
+
+    if 'sip_details_filled' in results['results']:
+        print(f"SIP Details Filled: {results['results']['sip_details_filled']}")
+    if 'otm_details_filled' in results['results']:
+        print(f"OTM Details Filled: {results['results']['otm_details_filled']}")
+
+    # Display form types available
+    print(f"Form Types Present: {', '.join(results['results']['form_types'])}")
+
+    # Display phase 2 data if available
+    if 'phase2_data' in results['results']:
+        print("\nPhase 2 Details:")
+        for key, value in results['results']['phase2_data'].items():
+            print(f"{key}: {value}")
+
+    # Display visualizations
+    plt.figure(figsize=(20, 5 * len(images)))
+    for i, img in enumerate(images):
+        plt.subplot(len(images), 1, i+1)
+        plt.imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+        plt.title(f"Page {i+1}")
+        plt.axis('off')
+    plt.tight_layout()
+    plt.show()
+# Base dataclass for form fields
+@dataclass
+class FormField:
+    """Represents a field in the form with its validation rules"""
+    name: str
+    keywords: List[str]
+    required: bool = True
+    expected_format: str = None
+    validation_func: callable = None
+
+# Form type enumeration
+class FormType:
+    CAF = "CAF"
+    CTF = "CTF"
+    SIP = "SIP"
+    MULTIPLE_SIP = "MULTIPLE_SIP"
+
+# Base validator class
+class FormValidator:
+    """Enhanced base validator class with improved handwriting detection"""
+
+    def __init__(self):
+        # Initialize EasyOCR with enhanced settings for handwriting
+        self.reader = easyocr.Reader(
+            ['en'],
+            recog_network='english_g2',  # Better for general text including handwriting
+            gpu=True if torch.cuda.is_available() else False
+        )
+        self._setup_logging()
+        self.confidence_threshold = 0.3  # Adjustable threshold for text detection
+        self.handwriting_detector = HandwritingDetectorV3()
+
+    def _setup_logging(self):
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s'
+        )
+        self.logger = logging.getLogger(__name__)
+###############
+
+    def _check_handwritten_content(self, section_image: np.ndarray) -> bool:
+        """
+        Check if a section contains handwritten content
+        Args:
+            section_image: Cropped image of the section to analyze
+        Returns:
+            bool: True if handwritten content is detected
+        """
+        try:
+            # Save temporary image for processing
+            temp_path = 'temp_section.png'
+            cv2.imwrite(temp_path, section_image)
+            
+            # Detect handwritten regions
+            regions, _ = self.handwriting_detector.detect_handwriting(temp_path)
+            
+            # Clean up temporary file
+            os.remove(temp_path)
+            
+            # Return True if any handwritten regions were found
+            return len(regions) > 0
+        except Exception as e:
+            self.logger.error(f"Error in handwriting detection: {str(e)}")
+            return False
+
+    def _validate_section_filled(self, image: np.ndarray, section_coords: Tuple[float, float, float, float]) -> bool:
+        """
+        Validate if a section is filled using both OCR and handwriting detection
+        """
+        h, w = image.shape[:2]
+        y1, y2, x1, x2 = section_coords
+        
+        # Extract section
+        section = image[int(y1*h):int(y2*h), int(x1*w):int(x2*w)]
+        
+        # Check for handwritten content first
+        if self._check_handwritten_content(section):
+            return True
+            
+        # If no handwriting detected, use OCR as backup
+        text_blocks = self._extract_text(section)
+        
+        # Check if any high-confidence text was detected
+        has_text = any(
+            block['confidence'] > self.confidence_threshold
+            for block in text_blocks
+        )
+        
+        return has_text
+
+
+
+
+
+
+
+
+
+######
+    def load_document(self, file_path: str) -> List[np.ndarray]:
+        """Load document from PDF or TIFF"""
+        file_ext = Path(file_path).suffix.lower()
+
+        if file_ext == '.pdf':
+            return self._load_pdf(file_path)
+        elif file_ext in ['.tiff', '.tif']:
+            return self._load_tiff(file_path)
+        else:
+            raise ValueError(f"Unsupported file format: {file_ext}")
+
+    def _load_pdf(self, file_path: str) -> List[np.ndarray]:
+        """Load PDF file"""
+        images = convert_from_path(file_path)
+        return [np.array(img) for img in images]
+
+    def _load_tiff(self, file_path: str) -> List[np.ndarray]:
+        """Load TIFF file"""
+        tiff_image = Image.open(file_path)
+        images = []
+
+        for i in range(tiff_image.n_frames):
+            tiff_image.seek(i)
+            images.append(np.array(tiff_image.convert('RGB')))
+
+        return images
+
+    def _extract_section(self, image: np.ndarray, y1: float, y2: float,
+                        x1: float, x2: float) -> np.ndarray:
+        """Extract section from image using relative coordinates"""
+        h, w = image.shape[:2]
+        return image[int(y1*h):int(y2*h), int(x1*w):int(x2*w)]
+
+
+    def preprocess_image(self, image: np.ndarray) -> np.ndarray:
+        """Enhanced image preprocessing for better text detection"""
+        # Convert to grayscale if needed
+        if len(image.shape) == 3:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = image
+
+        # Enhance contrast
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        enhanced = clahe.apply(gray)
+
+        # Denoise
+        denoised = cv2.fastNlMeansDenoising(enhanced)
+
+        # Adaptive thresholding with adjusted parameters
+        thresh = cv2.adaptiveThreshold(
+            denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY, 15, 8
+        )
+
+        return thresh
+
+    def _extract_text(self, image: np.ndarray, section_name: str = "") -> List[Dict]:
+        """Enhanced text extraction with confidence filtering and multiple attempts"""
+        try:
+            # Preprocess image
+            processed_img = self.preprocess_image(image)
+
+            # First attempt with original image
+            results = self.reader.readtext(image)
+
+            # If no results or low confidence, try with processed image
+            if not results or all(conf < self.confidence_threshold for _, _, conf in results):
+                results = self.reader.readtext(processed_img)
+
+            text_blocks = []
+            h, w = image.shape[:2]
+
+            for bbox, text, conf in results:
+                # Skip if confidence is too low
+                if conf < self.confidence_threshold:
+                    continue
+
+                # Convert bbox to relative coordinates
+                (x1, y1), (x2, y2) = bbox[0], bbox[2]
+                rel_bbox = (x1/w, y1/h, x2/w, y2/h)
+
+                # Clean and normalize text
+                cleaned_text = self._clean_text(text)
+
+                if cleaned_text:  # Only add if text is not empty after cleaning
+                    text_blocks.append({
+                        'text': cleaned_text,
+                        'bbox': rel_bbox,
+                        'confidence': conf,
+                        'section': section_name
+                    })
+
+            return text_blocks
+
+        except Exception as e:
+            self.logger.error(f"Error in text extraction ({section_name}): {str(e)}")
+            return []
+
+    def _clean_text(self, text: str) -> str:
+        """Clean and normalize extracted text"""
+        # Remove special characters but keep essential ones
+        text = re.sub(r'[^a-zA-Z0-9\s\-_./\\()]', '', text)
+        # Normalize whitespace
+        text = ' '.join(text.split())
+        # Convert to lowercase for comparison
+        return text.strip().lower()
+
+    def _check_checkbox(self, image: np.ndarray, region: Tuple[float, float, float, float]) -> bool:
+        """Check if a checkbox is marked"""
+        h, w = image.shape[:2]
+        y1, y2, x1, x2 = region
+        checkbox_region = image[int(y1*h):int(y2*h), int(x1*w):int(x2*w)]
+
+        # Convert to grayscale if needed
+        if len(checkbox_region.shape) == 3:
+            checkbox_region = cv2.cvtColor(checkbox_region, cv2.COLOR_BGR2GRAY)
+
+        # Count dark pixels
+        dark_pixels = np.sum(checkbox_region < 128)
+        total_pixels = checkbox_region.size
+
+        # If more than 15% pixels are dark, consider it checked
+        return (dark_pixels / total_pixels) > 0.15
+
+    def _find_best_match(self, text: str, keywords: List[str], threshold: float = 0.8) -> Optional[str]:
+        """Find best matching keyword using fuzzy matching"""
+        from Levenshtein import ratio
+        best_match = None
+        best_ratio = 0
+
+        for keyword in keywords:
+            r = ratio(text.lower(), keyword.lower())
+            if r > threshold and r > best_ratio:
+                best_ratio = r
+                best_match = keyword
+
+        return best_match
+
+    def _validate_field_presence(self, text_blocks: List[Dict],
+                               required_fields: List[str],
+                               threshold: float = 0.8) -> Dict[str, bool]:
+        """Validate presence of required fields with fuzzy matching"""
+        field_status = {field: False for field in required_fields}
+
+        for block in text_blocks:
+            text = block['text'].lower()
+
+            for field in required_fields:
+                if not field_status[field]:  # Only check if not already found
+                    # Try exact match first
+                    if field.lower() in text:
+                        field_status[field] = True
+                    else:
+                        # Try fuzzy matching
+                        match = self._find_best_match(text, [field], threshold)
+                        if match:
+                            field_status[field] = True
+
+        return field_status
+
+class CAFValidator(FormValidator):
+    """Enhanced validator for CAF with improved handwriting detection"""
+
+    def __init__(self):
+        super().__init__()
+        self.section8_fields = {
+            'investment_type': ['SIP', 'SIP with TOPUP', 'MicroSIP'],
+            'sip_details': ['Frequency', 'Amount', 'Date', 'Period']
+        }
+        self.otm_fields = {
+            'bank_account': r'\d{9,18}',
+            'ifsc': r'^[A-Z]{4}0[A-Z0-9]{6}$',
+            'keywords': ['bank account', 'ifsc', 'bank name']
+        }
+
+    def validate_form(self, images: List[np.ndarray]) -> Dict:
+        """Validate CAF form with enhanced checks"""
+        results = {
+            'sip_details_filled': False,
+            'otm_details_filled': False,
+            'total_pages': len(images),
+            'form_types': [FormType.CAF],
+            'phase2_data': {}
+        }
+
+        # Validate Section 8 (Page 2)
+        if len(images) >= 2:
+            section8_img = self._extract_section(images[1], 0.15, 0.45, 0.05, 0.95)
+            section8_results = self._validate_section8(section8_img)
+            results.update(section8_results)
+
+            # Phase 2 data for Section 8
+            phase2_data = self._extract_phase2_section8(section8_img)
+            results['phase2_data'].update(phase2_data)
+
+        # Validate OTM Section (Page 3)
+        if len(images) >= 3:
+            otm_img = self._extract_section(images[2], 0.50, 0.98, 0.05, 0.95)
+            otm_results = self._validate_otm(otm_img)
+            results.update(otm_results)
+
+        return results
+
+    def _validate_section8(self, image: np.ndarray) -> Dict:
+        """Enhanced validation for Section 8 with handwriting detection"""
+        results = {'sip_details_filled': False}
+
+        # Check for handwritten content first
+        if self._check_handwritten_content(image):
+            results['sip_details_filled'] = True
+            return results
+
+        # If no handwriting detected, fall back to OCR validation
+        text_blocks = self._extract_text(image, "Section 8")
+
+        # Check for investment type selection
+        investment_type_found = any(
+            self._find_best_match(block['text'], self.section8_fields['investment_type'])
+            for block in text_blocks
+        )
+
+        # Check for SIP details
+        sip_details_found = self._validate_field_presence(
+            text_blocks,
+            self.section8_fields['sip_details']
+        )
+
+        # Look for filled values in the tabular column
+        filled_values = sum(1 for block in text_blocks
+                          if re.search(r'\d', block['text'])
+                          and block['confidence'] > 0.4)
+
+        results['sip_details_filled'] = (
+            investment_type_found or
+            any(sip_details_found.values()) or
+            filled_values > 2
+        )
+
+        return results
+
+    def _validate_otm(self, image: np.ndarray) -> Dict:
+        """Enhanced validation for OTM section with handwriting detection"""
+        results = {'otm_details_filled': False}
+
+        # Check for handwritten content first
+        if self._check_handwritten_content(image):
+            results['otm_details_filled'] = True
+            return results
+
+        # Fall back to OCR validation
+        text_blocks = self._extract_text(image, "OTM Section")
+
+        # Phase 1: Check if any OTM field is filled
+        otm_keywords_found = any(
+            self._find_best_match(block['text'], self.otm_fields['keywords'])
+            for block in text_blocks
+        )
+
+        # Phase 2: Check for mandatory fields
+        if otm_keywords_found:
+            account_valid = any(
+                re.search(self.otm_fields['bank_account'], block['text'])
+                for block in text_blocks
+                if block['confidence'] > 0.4
+            )
+
+            ifsc_valid = any(
+                re.search(self.otm_fields['ifsc'], block['text'])
+                for block in text_blocks
+                if block['confidence'] > 0.4
+            )
+
+            results['otm_details_filled'] = account_valid and ifsc_valid
+
+        return results
+
+    def _extract_phase2_section8(self, image: np.ndarray) -> Dict:
+        """Extract Phase 2 data from Section 8 with handwriting support"""
+        # First check for handwritten content
+        has_handwriting = self._check_handwritten_content(image)
+
+        text_blocks = self._extract_text(image, "Section 8")
+
+        # Count total schemes
+        total_schemes = self._count_schemes(text_blocks)
+
+        # Extract frequency
+        frequency = self._extract_frequency(text_blocks)
+
+        # Count filled rows (consider both handwritten and printed text)
+        filled_rows = self._count_filled_rows(text_blocks) if not has_handwriting else self._estimate_handwritten_rows(image)
+
+        return {
+            'total_schemes': total_schemes,
+            'frequency': frequency,
+            'filled_rows': filled_rows,
+            'has_handwriting': has_handwriting
+        }
+
+    def _estimate_handwritten_rows(self, image: np.ndarray) -> int:
+        """Estimate number of filled rows when handwritten content is detected"""
+        try:
+            # Save temporary image for processing
+            temp_path = 'temp_section.png'
+            cv2.imwrite(temp_path, image)
+            
+            # Detect handwritten regions
+            regions, _ = self.handwriting_detector.detect_handwriting(temp_path)
+            
+            # Clean up temporary file
+            os.remove(temp_path)
+            
+            # Group regions by vertical position to estimate rows
+            if regions:
+                y_positions = [y for x, y, w, h in regions]
+                y_positions.sort()
+                
+                # Use clustering to group nearby y-positions
+                from sklearn.cluster import DBSCAN
+                clustering = DBSCAN(eps=20, min_samples=1).fit([[y] for y in y_positions])
+                unique_rows = len(set(clustering.labels_))
+                
+                return unique_rows
+            
+            return 0
+        except Exception as e:
+            self.logger.error(f"Error estimating handwritten rows: {str(e)}")
+            return 0
+    def _count_schemes(self, text_blocks: List[Dict]) -> int:
+        """Count total schemes with improved pattern matching"""
+        scheme_pattern = r'scheme\s*\d+|scheme\s*name|folio\s*no'
+        schemes = set()
+
+        for block in text_blocks:
+            if block['confidence'] > 0.4:  # Only consider higher confidence blocks
+                matches = re.finditer(scheme_pattern, block['text'].lower())
+                schemes.update(match.group() for match in matches)
+
+        return len(schemes)
+
+    def _extract_frequency(self, text_blocks: List[Dict]) -> Optional[str]:
+        """Extract frequency with improved detection"""
+        frequency_keywords = ['monthly', 'quarterly', 'yearly', 'weekly']
+
+        for block in text_blocks:
+            if block['confidence'] > 0.4:
+                match = self._find_best_match(block['text'], frequency_keywords)
+                if match:
+                    return match
+
+        return None
+
+    def _count_filled_rows(self, text_blocks: List[Dict]) -> int:
+        """Count number of filled rows in SIP details table"""
+        filled_count = 0
+        current_row = set()
+
+        for block in text_blocks:
+            if block['confidence'] > 0.4 and re.search(r'\d', block['text']):
+                current_row.add(block['bbox'][1])  # Use y-coordinate to group by row
+
+                # If we have multiple entries in the same row
+                if len(current_row) >= 2:
+                    filled_count += 1
+                    current_row = set()
+
+        return filled_count
+
+
+class SIPValidator(FormValidator):
+    """Enhanced validator for SIP & SIP-TOP UP forms with improved handwriting detection"""
+
+    def __init__(self):
+        super().__init__()
+        # Transaction type options from the form
+        self.transaction_types = [
+            'SIP Registration',
+            'SIP Renewal',
+            'SIP with Top-up Registration',
+            'SIP - Change in Bank Details'
+        ]
+
+        # Coordinates for different sections
+        self.sections = {
+            'transaction_type': {
+                'coords': (0.15, 0.25, 0.05, 0.95),  # Checkbox area at top
+                'name': 'Transaction Type Section'
+            },
+            'sip_details': {
+                'coords': (0.35, 0.45, 0.05, 0.95),  # SIP DETAIL section
+                'name': 'SIP Details Section'
+            },
+            'otm': {
+                'coords': (0.70, 0.90, 0.05, 0.95),  # OTM section at bottom
+                'name': 'OTM Section'
+            }
+        }
+
+        # Fields to check in OTM section
+        self.otm_fields = {
+            'bank_account': r'\d{9,18}',  # Bank account number pattern
+            'ifsc': r'^[A-Z]{4}0[A-Z0-9]{6}$'  # IFSC pattern
+        }
+
+        # Frequency options from the form
+        self.frequency_options = [
+            'Weekly',
+            'Monthly',
+            'Quarterly',
+            'Half Yearly',
+            'Yearly'
+        ]
+
+    def validate_form(self, images: List[np.ndarray]) -> Dict:
+        """Validate SIP form with enhanced handwriting detection"""
+        results = {
+            'sip_details_filled': False,
+            'otm_details_filled': False,
+            'total_pages': len(images),
+            'transaction_type': None,
+            'form_types': [FormType.SIP],
+            'frequency': None,
+            'handwriting_detected': {
+                'sip_details': False,
+                'otm': False
+            }
+        }
+
+        if not images:
+            return results
+
+        # Process Transaction Type section
+        transaction_section = self._extract_section(
+            images[0],
+            *self.sections['transaction_type']['coords']
+        )
+        results['transaction_type'] = self._validate_transaction_type(transaction_section)
+
+        # Process SIP Details section with handwriting detection
+        sip_section = self._extract_section(
+            images[0],
+            *self.sections['sip_details']['coords']
+        )
+        sip_results = self._validate_sip_details(sip_section)
+        results.update(sip_results)
+
+        # Process OTM section with handwriting detection
+        otm_section = self._extract_section(
+            images[0],
+            *self.sections['otm']['coords']
+        )
+        otm_results = self._validate_otm(otm_section)
+        results.update(otm_results)
+
+        return results
+
+    def _validate_sip_details(self, image: np.ndarray) -> Dict:
+        """Enhanced SIP details validation with handwriting detection"""
+        results = {
+            'sip_details_filled': False,
+            'frequency': None,
+            'handwriting_detected': {
+                'sip_details': False
+            }
+        }
+
+        # Check for handwritten content
+        results['handwriting_detected']['sip_details'] = self._check_handwritten_content(image)
+
+        if results['handwriting_detected']['sip_details']:
+            results['sip_details_filled'] = True
+            
+            # Try to extract frequency even if handwriting is detected
+            text_blocks = self._extract_text(image)
+            
+            for block in text_blocks:
+                if block['confidence'] > self.confidence_threshold:
+                    text = block['text'].lower()
+                    for freq in self.frequency_options:
+                        if self._find_best_match(text, [freq.lower()], threshold=0.8):
+                            results['frequency'] = freq
+                            break
+            return results
+
+        # If no handwriting detected, perform OCR-based validation
+        text_blocks = self._extract_text(image)
+        
+        # Check for frequency
+        for block in text_blocks:
+            if block['confidence'] > self.confidence_threshold:
+                text = block['text'].lower()
+                for freq in self.frequency_options:
+                    if self._find_best_match(text, [freq.lower()], threshold=0.8):
+                        results['frequency'] = freq
+                        break
+
+        # Check for numerical values and other indicators of filled details
+        has_numbers = any(
+            re.search(r'\d', block['text'])
+            for block in text_blocks
+            if block['confidence'] > self.confidence_threshold
+        )
+
+        # Consider details filled if we found frequency or numbers
+        results['sip_details_filled'] = bool(results['frequency'] or has_numbers)
+
+        return results
+
+    def _validate_otm(self, image: np.ndarray) -> Dict:
+        """Enhanced OTM validation with handwriting detection"""
+        results = {
+            'otm_details_filled': False,
+            'handwriting_detected': {
+                'otm': False
+            }
+        }
+
+        # Check for handwritten content
+        results['handwriting_detected']['otm'] = self._check_handwritten_content(image)
+
+        if results['handwriting_detected']['otm']:
+            results['otm_details_filled'] = True
+            return results
+
+        # If no handwriting detected, perform OCR-based validation
+        text_blocks = self._extract_text(image)
+
+        # Check for account number pattern
+        account_valid = any(
+            re.search(self.otm_fields['bank_account'], block['text'])
+            for block in text_blocks
+            if block['confidence'] > self.confidence_threshold
+        )
+
+        # Check for IFSC pattern
+        ifsc_valid = any(
+            re.search(self.otm_fields['ifsc'], block['text'])
+            for block in text_blocks
+            if block['confidence'] > self.confidence_threshold
+        )
+
+        results['otm_details_filled'] = account_valid and ifsc_valid
+        return results
+
+    def _validate_transaction_type(self, image: np.ndarray) -> Optional[str]:
+        """Enhanced transaction type validation"""
+        # Primary OCR-based check
+        text_blocks = self._extract_text(image)
+
+        for block in text_blocks:
+            if block['confidence'] > self.confidence_threshold:
+                text = block['text'].lower()
+                for trx_type in self.transaction_types:
+                    if self._find_best_match(text, [trx_type.lower()], threshold=0.8):
+                        return trx_type
+
+        # Secondary handwriting check
+        if self._check_handwritten_content(image):
+            return "Transaction Type Marked (Handwritten)"
+
+        return None
+
+    def _post_process_results(self, results: Dict) -> Dict:
+        """Post-process validation results"""
+        # Add confidence scores for detected fields
+        results['confidence_scores'] = {
+            'transaction_type': 0.9 if results['transaction_type'] else 0.0,
+            'sip_details': 0.9 if results['handwriting_detected']['sip_details'] else 0.7 if results['sip_details_filled'] else 0.0,
+            'otm': 0.9 if results['handwriting_detected']['otm'] else 0.7 if results['otm_details_filled'] else 0.0
+        }
+
+        # Add detailed validation flags
+        results['validation_details'] = {
+            'has_handwriting': any(results['handwriting_detected'].values()),
+            'has_valid_frequency': results['frequency'] is not None,
+            'all_required_fields_filled': all([
+                results['sip_details_filled'],
+                results['otm_details_filled']
+            ])
+        }
+
+        return results
+
+class CTFValidator(FormValidator):
+    """Enhanced validator for CTF with improved handwriting detection"""
+
+    def __init__(self):
+        super().__init__()
+        self.transaction_types = {
+            'ADDITIONAL_PURCHASE': {'y1': 0.25, 'y2': 0.32, 'section_num': '1'},
+            'SWITCH': {'y1': 0.58, 'y2': 0.75, 'section_num': '2'},
+            'REDEMPTION': {'y1': 0.75, 'y2': 0.92, 'section_num': '3'}
+        }
+
+        self.trxn_patterns = {
+            'AP': ['additional purchase', 'ap', 'add. purchase'],
+            'Switch': ['switch', 'switch request', 'switching'],
+            'Redemption': ['redemption', 'redeem', 'withdrawal']
+        }
+
+    def validate_form(self, images: List[np.ndarray]) -> Dict:
+        """Enhanced validation with handwriting detection"""
+        results = {
+            'transaction_types': [],
+            'sip_form_attached': False,
+            'total_pages': len(images),
+            'form_types': [FormType.CTF],
+            'handwriting_detected': {},
+            'section_details': {}
+        }
+
+        if not images:
+            return results
+
+        # Check first page for transaction types
+        x1, x2 = 0.05, 0.95  # Common width coverage
+
+        # Check each transaction section
+        for trxn_name, coords in self.transaction_types.items():
+            section_img = self._extract_section(
+                images[0],
+                coords['y1'],
+                coords['y2'],
+                x1,
+                x2
+            )
+            
+            # Initialize section results
+            section_results = self._validate_section(
+                section_img,
+                trxn_name,
+                coords['section_num']
+            )
+            
+            # Update results
+            if section_results['is_filled']:
+                results['transaction_types'].append(trxn_name)
+            
+            results['handwriting_detected'][trxn_name] = section_results['has_handwriting']
+            results['section_details'][trxn_name] = section_results
+
+        # Remove duplicates while preserving order
+        results['transaction_types'] = list(dict.fromkeys(results['transaction_types']))
+
+        # Check for attached SIP form
+        if len(images) > 1:
+            if not self._is_instruction_page(images[1]):
+                sip_validator = SIPValidator()
+                sip_results = sip_validator.validate_form([images[1]])
+                
+                if sip_results.get('sip_details_filled', False):
+                    results['sip_form_attached'] = True
+                    results['sip_parameters'] = sip_results
+                    results['form_types'].append(FormType.SIP)
+
+        return results
+
+    def _validate_section(self, image: np.ndarray, section_name: str, section_num: str) -> Dict:
+        """Validate individual section with handwriting detection"""
+        section_results = {
+            'is_filled': False,
+            'has_handwriting': False,
+            'confidence': 0.0,
+            'detected_text': [],
+            'validation_method': None
+        }
+
+        # Check for handwritten content first
+        section_results['has_handwriting'] = self._check_handwritten_content(image)
+        
+        if section_results['has_handwriting']:
+            section_results['is_filled'] = True
+            section_results['confidence'] = 0.9
+            section_results['validation_method'] = 'handwriting'
+            return section_results
+
+        # If no handwriting, perform OCR validation
+        text_blocks = self._extract_text(image, f"Section {section_num} - {section_name}")
+        
+        # Check for transaction type indicators
+        for block in text_blocks:
+            if block['confidence'] > self.confidence_threshold:
+                section_results['detected_text'].append({
+                    'text': block['text'],
+                    'confidence': block['confidence']
+                })
+                
+                text = block['text'].lower()
+                patterns = self.trxn_patterns.get(section_name.split('_')[0], [])
+                
+                # Try exact matches first
+                if any(pattern in text for pattern in patterns):
+                    section_results['is_filled'] = True
+                    section_results['confidence'] = block['confidence']
+                    section_results['validation_method'] = 'ocr_exact'
+                    break
+                
+                # Try fuzzy matching if no exact match
+                for pattern in patterns:
+                    if self._find_best_match(text, [pattern], threshold=0.8):
+                        section_results['is_filled'] = True
+                        section_results['confidence'] = block['confidence'] * 0.9  # Slightly lower confidence for fuzzy match
+                        section_results['validation_method'] = 'ocr_fuzzy'
+                        break
+
+        # Check for numerical values if no other indicators found
+        if not section_results['is_filled']:
+            has_numbers = any(
+                re.search(r'\d', block['text'])
+                for block in text_blocks
+                if block['confidence'] > self.confidence_threshold
+            )
+            if has_numbers:
+                section_results['is_filled'] = True
+                section_results['confidence'] = 0.7  # Lower confidence for number-only detection
+                section_results['validation_method'] = 'ocr_numbers'
+
+        return section_results
+
+    def _is_instruction_page(self, image: np.ndarray) -> bool:
+        """Check if the page is an instruction page"""
+        header_section = self._extract_section(image, 0.05, 0.15, 0.3, 0.7)
+        text_blocks = self._extract_text(header_section, "Header")
+        
+        return any('instruction' in block['text'].lower() 
+                  for block in text_blocks 
+                  if block['confidence'] > self.confidence_threshold)
+
+
+class EnhancedVisualizationHelper:
+    """Enhanced visualization helper with handwriting detection support"""
+
+    def __init__(self):
+        self.colors = {
+            'handwritten': (0, 255, 0),     # Green for handwritten content
+            'ocr_text': (255, 0, 0),        # Red for OCR detected text
+            'section_boundary': (0, 0, 255), # Blue for section boundaries
+            'low_confidence': (255, 165, 0), # Orange for low confidence detections
+            'highlight': (255, 255, 0)       # Yellow for highlights
+        }
+
+    def visualize_processing(self, image: np.ndarray, results: Dict,
+                           handwriting_regions: List[Tuple[int, int, int, int]],
+                           text_blocks: Dict[str, List[Dict]],
+                           output_dir: str = "visualization"):
+        """
+        Create comprehensive visualization with both handwriting and OCR results
+        
+        Args:
+            image: Original form image
+            results: Processing results dictionary
+            handwriting_regions: List of detected handwriting regions (x, y, w, h)
+            text_blocks: Dictionary of OCR text blocks by section
+            output_dir: Output directory for saved visualizations
+        """
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Create copy for visualization
+        viz_image = image.copy()
+        h, w = image.shape[:2]
+
+        # Draw handwriting regions
+        self._draw_handwriting_regions(viz_image, handwriting_regions)
+
+        # Draw OCR text blocks
+        self._draw_ocr_blocks(viz_image, text_blocks)
+
+        # Draw section boundaries
+        self._draw_section_boundaries(viz_image, results)
+
+        # Save visualization
+        output_path = os.path.join(output_dir, "form_analysis.png")
+        cv2.imwrite(output_path, cv2.cvtColor(viz_image, cv2.COLOR_RGB2BGR))
+
+        # Create detailed visualizations
+        self._create_detailed_views(image, results, handwriting_regions, 
+                                  text_blocks, output_dir)
+
+        # Display results
+        self._display_results(viz_image, results, handwriting_regions, text_blocks)
+
+    def _draw_handwriting_regions(self, image: np.ndarray, 
+                                regions: List[Tuple[int, int, int, int]]):
+        """Draw handwriting regions with distinct styling"""
+        for x, y, w, h in regions:
+            # Draw filled semi-transparent rectangle
+            overlay = image.copy()
+            cv2.rectangle(overlay, (x, y), (x + w, y + h), 
+                         self.colors['handwritten'], -1)
+            cv2.addWeighted(overlay, 0.3, image, 0.7, 0, image)
+            
+            # Draw border
+            cv2.rectangle(image, (x, y), (x + w, y + h), 
+                         self.colors['handwritten'], 2)
+            
+            # Add label
+            cv2.putText(image, "Handwritten", (x, y - 5),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                       self.colors['handwritten'], 1)
+
+    def _draw_ocr_blocks(self, image: np.ndarray, 
+                        text_blocks: Dict[str, List[Dict]]):
+        """Draw OCR text blocks with confidence indicators"""
+        h, w = image.shape[:2]
+        
+        for section_name, blocks in text_blocks.items():
+            for block in blocks:
+                x1, y1, x2, y2 = [int(coord * w) for coord in block['bbox']]
+                
+                # Choose color based on confidence
+                color = (self.colors['ocr_text'] if block['confidence'] > 0.6 
+                        else self.colors['low_confidence'])
+                
+                # Draw rectangle
+                cv2.rectangle(image, (x1, y1), (x2, y2), color, 1)
+                
+                # Add text and confidence
+                text = f"{block['text'][:20]}... ({block['confidence']:.2f})"
+                cv2.putText(image, text, (x1, y1 - 5),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+
+    def _draw_section_boundaries(self, image: np.ndarray, results: Dict):
+        """Draw section boundaries with validation status"""
+        h, w = image.shape[:2]
+        
+        for section_name, details in results.get('section_details', {}).items():
+            if 'coords' in details:
+                y1, y2, x1, x2 = [int(coord * dim) for coord, dim 
+                                 in zip(details['coords'], [h, h, w, w])]
+                
+                # Draw section boundary
+                cv2.rectangle(image, (x1, y1), (x2, y2), 
+                             self.colors['section_boundary'], 2)
+                
+                # Add section label with validation method
+                label = f"{section_name} ({details['validation_method']})"
+                cv2.putText(image, label, (x1, y1 - 10),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                           self.colors['section_boundary'], 2)
+
+    def _create_detailed_views(self, image: np.ndarray, results: Dict,
+                             handwriting_regions: List[Tuple[int, int, int, int]],
+                             text_blocks: Dict[str, List[Dict]], output_dir: str):
+        """Create detailed visualizations for each section"""
+        for section_name, details in results.get('section_details', {}).items():
+            if 'coords' in details:
+                # Extract section
+                section_img = self._extract_section(image, details['coords'])
+                
+                # Create visualization for this section
+                self._create_section_visualization(
+                    section_img, section_name, 
+                    handwriting_regions, text_blocks.get(section_name, []),
+                    output_dir
+                )
+
+    def _display_results(self, image: np.ndarray, results: Dict,
+                        handwriting_regions: List[Tuple[int, int, int, int]],
+                        text_blocks: Dict[str, List[Dict]]):
+        """Display results with matplotlib"""
+        plt.figure(figsize=(15, 20))
+        
+        # Display annotated image
+        plt.subplot(2, 1, 1)
+        plt.title("Form Processing Results")
+        plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+        plt.axis('off')
+        
+        # Display results summary
+        plt.subplot(2, 1, 2)
+        plt.axis('off')
+        
+        # Prepare results text
+        self._display_results_summary(results, handwriting_regions, text_blocks)
+
+        plt.tight_layout()
+        plt.show()
+
+    def _display_results_summary(self, results: Dict,
+                               handwriting_regions: List[Tuple[int, int, int, int]],
+                               text_blocks: Dict[str, List[Dict]]):
+        """Display detailed results summary"""
+        summary_text = [
+            "Processing Results:",
+            f"Total Handwritten Regions: {len(handwriting_regions)}",
+            f"Total OCR Text Blocks: {sum(len(blocks) for blocks in text_blocks.values())}",
+            "\nSection Details:"
+        ]
+        
+        for section_name, details in results.get('section_details', {}).items():
+            summary_text.extend([
+                f"\n{section_name}:",
+                f"- Validation Method: {details['validation_method']}",
+                f"- Confidence: {details['confidence']:.2f}",
+                f"- Has Handwriting: {details.get('has_handwriting', False)}"
+            ])
+        
+        plt.text(0.1, 0.9, '\n'.join(summary_text),
+                fontsize=10, verticalalignment='top')
+
+
+class MultipleSIPValidator(FormValidator):
+    """Validator for Multiple SIP Registration form"""
+
+    def __init__(self):
+        super().__init__()
+        self.transaction_types = [
+            'SIP Registration',
+            'SIP Renewal',
+            'SIP with Top-up Registration',
+            'SIP - Change in Bank Details'
+        ]
+
+        # Define sections and their coordinates
+        self.sections = {
+            'transaction_type': {
+                'coords': (0.15, 0.25, 0.05, 0.95),
+                'name': 'Transaction Type Section'
+            },
+            'sip_details': {
+                'coords': (0.35, 0.60, 0.05, 0.95),
+                'name': 'SIP Details Section',
+                'schemes': [
+                    {'name': 'Scheme1', 'coords': (0.38, 0.48, 0.05, 0.35)},
+                    {'name': 'Scheme2', 'coords': (0.38, 0.48, 0.35, 0.65)},
+                    {'name': 'Scheme3', 'coords': (0.38, 0.48, 0.65, 0.95)}
+                ]
+            },
+            'otm': {
+                'coords': (0.65, 0.95, 0.05, 0.95),
+                'name': 'OTM Section',
+                'required_fields': {
+                    'bank_account': r'\d{9,18}',
+                    'ifsc': r'^[A-Z]{4}0[A-Z0-9]{6}$'
+                }
+            }
+        }
+
+    def validate_form(self, images: List[np.ndarray]) -> Dict:
+        """Validate Multiple SIP form"""
+        results = {
+            'sip_details_filled': False,
+            'otm_details_filled': False,
+            'total_pages': len(images),
+            'form_types': [FormType.MULTIPLE_SIP],
+            'schemes_filled': []
+        }
+
+        if not images:
+            return results
+
+        # Skip processing if second page is instructions
+        if len(images) > 1 and self._is_instruction_page(images[1]):
+            results['total_pages'] = len(images) - 1
+
+        # Validate SIP Details section (first page)
+        sip_section = self._extract_section(
+            images[0],
+            *self.sections['sip_details']['coords']
+        )
+        sip_results = self._validate_sip_details(sip_section)
+        results.update(sip_results)
+
+        # Validate OTM Section (third page)
+        if len(images) >= 3:
+            otm_section = self._extract_section(
+                images[2],
+                *self.sections['otm']['coords']
+            )
+            results['otm_details_filled'] = self._validate_otm(otm_section)
+
+        return results
+
+    def _is_instruction_page(self, image: np.ndarray) -> bool:
+        """Check if the page is an instruction page"""
+        header = self._extract_section(image, 0.05, 0.15, 0.05, 0.95)
+        text_blocks = self._extract_text(header)
+        return any('instruction' in block['text'].lower() for block in text_blocks)
+
+    def _validate_sip_details(self, image: np.ndarray) -> Dict:
+        """Validate SIP details section with multiple schemes"""
+        results = {
+            'sip_details_filled': False,
+            'schemes_filled': []
+        }
+
+        # Check each scheme section
+        for scheme in self.sections['sip_details']['schemes']:
+            scheme_img = self._extract_section(
+                image,
+                *scheme['coords']
+            )
+            text_blocks = self._extract_text(scheme_img)
+
+            # Check if scheme has any filled details
+            has_content = any(
+                re.search(r'\d', block['text']) and block['confidence'] > 0.4
+                for block in text_blocks
+            )
+
+            if has_content:
+                results['schemes_filled'].append(scheme['name'])
+
+        results['sip_details_filled'] = len(results['schemes_filled']) > 0
+        return results
+
+    def _validate_otm(self, image: np.ndarray) -> bool:
+        """Validate OTM section"""
+        text_blocks = self._extract_text(image)
+
+        # Check for required fields
+        required_fields = self.sections['otm']['required_fields']
+
+        account_valid = any(
+            re.search(required_fields['bank_account'], block['text'])
+            for block in text_blocks
+            if block['confidence'] > 0.4
+        )
+
+        ifsc_valid = any(
+            re.search(required_fields['ifsc'], block['text'])
+            for block in text_blocks
+            if block['confidence'] > 0.4
+        )
+
+        return account_valid and ifsc_valid
+
+class MultipleSIPVisualizationHelper:
+    """Helper class for visualizing Multiple SIP form processing results"""
+
+    def __init__(self):
+        self.colors = {
+            'transaction_type': (255, 0, 0),    # Red
+            'sip_details': (0, 255, 0),         # Green
+            'scheme': (0, 128, 255),            # Light Blue
+            'otm': (0, 0, 255),                 # Dark Blue
+            'text_box': (255, 165, 0),          # Orange
+            'section_boundary': (128, 0, 128),  # Purple
+            'detected_field': (255, 255, 0),    # Yellow
+            'checkbox': (0, 255, 255)           # Cyan
+        }
+
+        # Define specific areas to highlight
+        self.highlight_areas = {
+            'transaction_type': [
+                {'name': 'SIP Registration', 'coords': (0.15, 0.20, 0.05, 0.25)},
+                {'name': 'SIP Renewal', 'coords': (0.15, 0.20, 0.25, 0.45)},
+                {'name': 'SIP with Top-up', 'coords': (0.15, 0.20, 0.45, 0.65)},
+                {'name': 'Change in Bank Details', 'coords': (0.15, 0.20, 0.65, 0.85)}
+            ],
+            'sip_details': [
+                # Scheme 1
+                {'name': 'Scheme1_Details', 'coords': (0.38, 0.48, 0.05, 0.35),
+                 'color': 'scheme'},
+                # Scheme 2
+                {'name': 'Scheme2_Details', 'coords': (0.38, 0.48, 0.35, 0.65),
+                 'color': 'scheme'},
+                # Scheme 3
+                {'name': 'Scheme3_Details', 'coords': (0.38, 0.48, 0.65, 0.95),
+                 'color': 'scheme'}
+            ],
+            'otm': [
+                {'name': 'Bank Account', 'coords': (0.15, 0.20, 0.05, 0.45)},
+                {'name': 'IFSC', 'coords': (0.20, 0.25, 0.05, 0.45)}
+            ]
+        }
+
+    def visualize_multiple_sip_processing(self, images: List[np.ndarray], results: Dict,
+                                        text_blocks: Dict[str, List[Dict]],
+                                        output_dir: str = "multiple_sip_visualization"):
+        """Visualize Multiple SIP form processing"""
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Process first page (main form)
+        main_page_img = images[0].copy()
+
+        # Draw main sections on first page
+        self._draw_main_page_sections(main_page_img, text_blocks)
+
+        # Save first page visualization
+        cv2.imwrite(os.path.join(output_dir, "page1_annotated.png"),
+                   cv2.cvtColor(main_page_img, cv2.COLOR_RGB2BGR))
+
+        # Process OTM page if available (usually page 3)
+        if len(images) >= 3:
+            otm_page_img = images[2].copy()
+            self._draw_otm_section(otm_page_img, text_blocks.get('otm', []))
+            cv2.imwrite(os.path.join(output_dir, "page3_otm_annotated.png"),
+                       cv2.cvtColor(otm_page_img, cv2.COLOR_RGB2BGR))
+
+        # Display results
+        self._display_visualization_results(main_page_img, results, text_blocks)
+
+    def _draw_main_page_sections(self, image: np.ndarray, text_blocks: Dict[str, List[Dict]]):
+        """Draw main page sections with their boundaries and detected text"""
+        h, w = image.shape[:2]
+
+        # Draw transaction type section
+        self._draw_section(image, (0.15, 0.25, 0.05, 0.95),
+                         "Transaction Type", self.colors['transaction_type'])
+
+        # Draw SIP Details section with schemes
+        self._draw_section(image, (0.35, 0.60, 0.05, 0.95),
+                         "SIP Details", self.colors['sip_details'])
+
+        # Draw individual schemes
+        for scheme in self.highlight_areas['sip_details']:
+            self._draw_section(image, scheme['coords'],
+                             scheme['name'], self.colors['scheme'])
+
+        # Draw detected text boxes
+        for section_name, blocks in text_blocks.items():
+            if section_name != 'otm':  # Skip OTM section for main page
+                self._draw_text_boxes(image, blocks, section_name)
+
+    def _draw_otm_section(self, image: np.ndarray, text_blocks: List[Dict]):
+        """Draw OTM section with its boundaries and detected text"""
+        # Draw main OTM section boundary
+        self._draw_section(image, (0.05, 0.45, 0.05, 0.95),
+                         "OTM Section", self.colors['otm'])
+
+        # Draw highlight areas
+        for area in self.highlight_areas['otm']:
+            self._draw_highlight_area(image, area['coords'], area['name'])
+
+        # Draw detected text boxes
+        self._draw_text_boxes(image, text_blocks, 'otm')
+
+    def _draw_section(self, image: np.ndarray, coords: Tuple[float, float, float, float],
+                     label: str, color: Tuple[int, int, int]):
+        """Draw section boundary with label"""
+        h, w = image.shape[:2]
+        y1, y2, x1, x2 = coords
+
+        start_point = (int(x1 * w), int(y1 * h))
+        end_point = (int(x2 * w), int(y2 * h))
+
+        cv2.rectangle(image, start_point, end_point, color, 2)
+
+        # Add section label
+        cv2.putText(image, label,
+                  (start_point[0], start_point[1] - 10),
+                  cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                  color, 2)
+
+    def _draw_highlight_area(self, image: np.ndarray, coords: Tuple[float, float, float, float],
+                           label: str):
+        """Draw highlight area for specific fields"""
+        h, w = image.shape[:2]
+        y1, y2, x1, x2 = coords
+
+        start_point = (int(x1 * w), int(y1 * h))
+        end_point = (int(x2 * w), int(y2 * h))
+
+        cv2.rectangle(image, start_point, end_point,
+                     self.colors['detected_field'], 1)
+
+        cv2.putText(image, label,
+                  (start_point[0], start_point[1] - 5),
+                  cv2.FONT_HERSHEY_SIMPLEX, 0.4,
+                  self.colors['detected_field'], 1)
+
+    def _draw_text_boxes(self, image: np.ndarray, blocks: List[Dict], section_name: str):
+        """Draw text boxes with confidence scores"""
+        h, w = image.shape[:2]
+
+        for block in blocks:
+            x1, y1, x2, y2 = block['bbox']
+            start_point = (int(x1 * w), int(y1 * h))
+            end_point = (int(x2 * w), int(y2 * h))
+
+            # Different color for high confidence text
+            color = (self.colors['text_box'] if block['confidence'] < 0.7
+                    else self.colors[section_name])
+
+            cv2.rectangle(image, start_point, end_point, color, 1)
+
+            # Add text and confidence
+            text = f"{block['text'][:20]}... ({block['confidence']:.2f})"
+            cv2.putText(image, text,
+                      (start_point[0], start_point[1] - 5),
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.4,
+                      color, 1)
+
+    def _display_visualization_results(self, image: np.ndarray, results: Dict,
+                                    text_blocks: Dict[str, List[Dict]]):
+        """Display visualization results"""
+        plt.figure(figsize=(15, 20))
+
+        # Display annotated image
+        plt.subplot(2, 1, 1)
+        plt.title("Multiple SIP Form Processing Visualization")
+        plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+        plt.axis('off')
+
+        # Display results
+        plt.subplot(2, 1, 2)
+        plt.axis('off')
+
+        # Prepare results text
+        result_text = [
+            "Processing Results:",
+            f"SIP Details Filled: {results.get('sip_details_filled', False)}",
+            f"OTM Details Filled: {results.get('otm_details_filled', False)}",
+            f"Total Pages: {results.get('total_pages', 0)}",
+            f"Schemes Filled: {', '.join(results.get('schemes_filled', []))}",
+            "\nDetected Text Blocks by Section:"
+        ]
+
+        # Add detected text blocks by section
+        for section_name, blocks in text_blocks.items():
+            result_text.append(f"\n{section_name.replace('_', ' ').title()}:")
+            for block in blocks:
+                result_text.append(
+                    f"- Text: {block['text'][:30]}... (Confidence: {block['confidence']:.2f})"
+                )
+
+        plt.text(0.1, 0.9, '\n'.join(result_text),
+                fontsize=10, verticalalignment='top')
+
+        plt.tight_layout()
+        plt.show()
+
+def visualize_multiple_sip_form(validator: MultipleSIPValidator,
+                              images: List[np.ndarray], results: Dict):
+    """Main function to visualize Multiple SIP form processing"""
+    # Extract text from all sections
+    text_blocks = {}
+
+    # Process main page sections
+    for section_name, section_info in validator.sections.items():
+        if section_name != 'otm':  # Handle OTM separately
+            section_img = validator._extract_section(
+                images[0],
+                *section_info['coords']
+            )
+            text_blocks[section_name] = validator._extract_text(
+                section_img,
+                section_info['name']
+            )
+
+    # Process OTM section if available
+    if len(images) >= 3:
+        otm_section = validator._extract_section(
+            images[2],
+            *validator.sections['otm']['coords']
+        )
+        text_blocks['otm'] = validator._extract_text(
+            otm_section,
+            validator.sections['otm']['name']
+        )
+
+    # Create visualization
+    viz_helper = MultipleSIPVisualizationHelper()
+    viz_helper.visualize_multiple_sip_processing(images, results, text_blocks)
+
+#part3
+class SIPVisualizationHelper:
+    """Enhanced helper class for visualizing SIP form processing results"""
+
+    def __init__(self):
+        self.colors = {
+            'transaction_type': (255, 0, 0),    # Red
+            'sip_details': (0, 255, 0),         # Green
+            'otm': (0, 0, 255),                 # Blue
+            'text_box': (255, 165, 0),          # Orange
+            'section_boundary': (128, 0, 128),  # Purple
+            'detected_field': (255, 255, 0),    # Yellow
+            'checkbox': (0, 255, 255)           # Cyan
+        }
+
+        # Define specific areas to highlight
+        self.highlight_areas = {
+            'transaction_type': [
+                {'name': 'SIP Registration', 'coords': (0.15, 0.20, 0.05, 0.25)},
+                {'name': 'SIP Renewal', 'coords': (0.15, 0.20, 0.25, 0.45)},
+                {'name': 'SIP with Top-up', 'coords': (0.15, 0.20, 0.45, 0.65)},
+                {'name': 'Change in Bank Details', 'coords': (0.15, 0.20, 0.65, 0.85)}
+            ],
+            'sip_details': [
+                {'name': 'Frequency Section', 'coords': (0.35, 0.40, 0.05, 0.45)},
+                {'name': 'Amount Section', 'coords': (0.35, 0.40, 0.45, 0.75)}
+            ],
+            'otm': [
+                # {'name': 'Bank Account', 'coords': (0.82, 0.87, 0.05, 0.45)},  #  (0.75, 0.80, 0.05, 0.45)
+                # {'name': 'IFSC', 'coords': (0.87, 0.92, 0.05, 0.45)}  #(0.80, 0.85, 0.05, 0.45)
+
+
+                  {'name': 'Bank Account', 'coords': (0.70, 0.75, 0.05, 0.45)},  # Bank A/c number area
+                  {'name': 'IFSC', 'coords': (0.75, 0.80, 0.05, 0.45)}          # IFSC code area
+]
+
+        }
+
+    def visualize_sip_processing(self, image: np.ndarray, results: Dict,
+                               text_blocks: Dict[str, List[Dict]],
+                               output_dir: str = "sip_visualization"):
+        """Visualize SIP form processing with enhanced bounding boxes"""
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Create copy for visualization
+        viz_image = image.copy()
+        h, w = image.shape[:2]
+
+        # Draw main sections
+        sections = {
+            'transaction_type': (0.15, 0.25, 0.05, 0.95),
+            'sip_details': (0.35, 0.45, 0.05, 0.95),
+            # 'otm': (0.50, 0.70, 0.05, 0.95)
+            'otm': (0.65, 0.95, 0.05, 0.95)  # y1=0.65, y2=0.95, x1=0.05, x2=0.95
+        }
+
+        # Draw main section boundaries
+        for section_name, coords in sections.items():
+            self._draw_section_boundary(viz_image, coords, section_name)
+
+            # Draw specific highlight areas for each section
+            if section_name in self.highlight_areas:
+                for area in self.highlight_areas[section_name]:
+                    self._draw_highlight_area(viz_image, area['coords'], area['name'])
+
+            # Draw detected text boxes
+            if section_name in text_blocks:
+                self._draw_text_boxes(viz_image, text_blocks[section_name],
+                                   coords, section_name)
+
+        # Highlight detected fields based on results
+        self._highlight_detected_fields(viz_image, results)
+
+        # Save full visualization
+        full_page_path = os.path.join(output_dir, "sip_form_annotated.png")
+        cv2.imwrite(full_page_path, cv2.cvtColor(viz_image, cv2.COLOR_RGB2BGR))
+
+        # Save detailed section views
+        for section_name, coords in sections.items():
+            if section_name in text_blocks:
+                self._save_detailed_section(image, coords, section_name,
+                                         text_blocks[section_name],
+                                         results, output_dir)
+
+        # Display results
+        self._display_visualization_results(viz_image, results, text_blocks)
+
+    def _draw_section_boundary(self, image: np.ndarray,
+                             coords: Tuple[float, float, float, float],
+                             section_name: str):
+        """Draw main section boundary with label"""
+        h, w = image.shape[:2]
+        y1, y2, x1, x2 = coords
+
+        start_point = (int(x1 * w), int(y1 * h))
+        end_point = (int(x2 * w), int(y2 * h))
+
+        cv2.rectangle(image, start_point, end_point,
+                     self.colors['section_boundary'], 2)
+
+        # Add section label
+        label = section_name.replace('_', ' ').title()
+        cv2.putText(image, label,
+                  (start_point[0], start_point[1] - 10),
+                  cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                  self.colors['section_boundary'], 2)
+
+    def _draw_highlight_area(self, image: np.ndarray,
+                           coords: Tuple[float, float, float, float],
+                           label: str):
+        """Draw highlight area for specific fields"""
+        h, w = image.shape[:2]
+        y1, y2, x1, x2 = coords
+
+        start_point = (int(x1 * w), int(y1 * h))
+        end_point = (int(x2 * w), int(y2 * h))
+
+        cv2.rectangle(image, start_point, end_point,
+                     self.colors['detected_field'], 1)
+
+        # Add field label
+        cv2.putText(image, label,
+                  (start_point[0], start_point[1] - 5),
+                  cv2.FONT_HERSHEY_SIMPLEX, 0.4,
+                  self.colors['detected_field'], 1)
+
+    def _draw_text_boxes(self, image: np.ndarray, blocks: List[Dict],
+                        section_coords: Tuple[float, float, float, float],
+                        section_name: str):
+        """Draw text boxes with confidence scores"""
+        h, w = image.shape[:2]
+        y1, y2, x1, x2 = section_coords
+
+        for block in blocks:
+            # Convert coordinates to absolute
+            rel_x1 = x1 + block['bbox'][0] * (x2 - x1)
+            rel_y1 = y1 + block['bbox'][1] * (y2 - y1)
+            rel_x2 = x1 + block['bbox'][2] * (x2 - x1)
+            rel_y2 = y1 + block['bbox'][3] * (y2 - y1)
+
+            start_point = (int(rel_x1 * w), int(rel_y1 * h))
+            end_point = (int(rel_x2 * w), int(rel_y2 * h))
+
+            # Different color for high confidence text
+            color = self.colors['text_box'] if block['confidence'] < 0.7 else self.colors[section_name]
+
+            cv2.rectangle(image, start_point, end_point, color, 1)
+
+            # Add text and confidence
+            text = f"{block['text'][:20]}... ({block['confidence']:.2f})"
+            cv2.putText(image, text,
+                      (start_point[0], start_point[1] - 5),
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.4,
+                      color, 1)
+
+    def _highlight_detected_fields(self, image: np.ndarray, results: Dict):
+        """Highlight detected fields based on processing results"""
+        h, w = image.shape[:2]
+
+        # Highlight transaction type if detected
+        if results.get('transaction_type'):
+            for area in self.highlight_areas['transaction_type']:
+                if area['name'].lower() in results['transaction_type'].lower():
+                    y1, y2, x1, x2 = area['coords']
+                    start_point = (int(x1 * w), int(y1 * h))
+                    end_point = (int(x2 * w), int(y2 * h))
+                    cv2.rectangle(image, start_point, end_point,
+                                self.colors['checkbox'], 2)
+
+        # Highlight frequency if detected
+        if results.get('frequency'):
+            freq_area = self.highlight_areas['sip_details'][0]
+            y1, y2, x1, x2 = freq_area['coords']
+            start_point = (int(x1 * w), int(y1 * h))
+            end_point = (int(x2 * w), int(y2 * h))
+            cv2.rectangle(image, start_point, end_point,
+                         self.colors['checkbox'], 2)
+
+        # Highlight OTM fields if filled
+        if results.get('otm_details_filled'):
+            for area in self.highlight_areas['otm']:
+                y1, y2, x1, x2 = area['coords']
+                start_point = (int(x1 * w), int(y1 * h))
+                end_point = (int(x2 * w), int(y2 * h))
+                cv2.rectangle(image, start_point, end_point,
+                             self.colors['checkbox'], 2)
+
+    def _save_detailed_section(self, image: np.ndarray,
+                             coords: Tuple[float, float, float, float],
+                             section_name: str, blocks: List[Dict],
+                             results: Dict, output_dir: str):
+        """Save detailed view of each section with annotations"""
+        h, w = image.shape[:2]
+        y1, y2, x1, x2 = coords
+
+        # Extract section
+        section = image[int(y1*h):int(y2*h), int(x1*w):int(x2*w)].copy()
+
+        # Add highlighting for detected fields
+        if section_name in self.highlight_areas:
+            for area in self.highlight_areas[section_name]:
+                area_y1, area_y2, area_x1, area_x2 = area['coords']
+                # Adjust coordinates relative to section
+                rel_y1 = (area_y1 - y1) / (y2 - y1)
+                rel_y2 = (area_y2 - y1) / (y2 - y1)
+                rel_x1 = (area_x1 - x1) / (x2 - x1)
+                rel_x2 = (area_x2 - x1) / (x2 - x1)
+
+                sh, sw = section.shape[:2]
+                start_point = (int(rel_x1 * sw), int(rel_y1 * sh))
+                end_point = (int(rel_x2 * sw), int(rel_y2 * sh))
+
+                cv2.rectangle(section, start_point, end_point,
+                             self.colors['detected_field'], 1)
+
+        # Save section
+        section_path = os.path.join(output_dir, f"section_{section_name}_detailed.png")
+        cv2.imwrite(section_path, cv2.cvtColor(section, cv2.COLOR_RGB2BGR))
+
+    def _display_visualization_results(self, image: np.ndarray,
+                                    results: Dict,
+                                    text_blocks: Dict[str, List[Dict]]):
+        """Display visualization results with enhanced information"""
+        plt.figure(figsize=(15, 20))
+
+        # Display annotated image
+        plt.subplot(2, 1, 1)
+        plt.title("SIP Form Processing Visualization")
+        plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+        plt.axis('off')
+
+        # Display results
+        plt.subplot(2, 1, 2)
+        plt.axis('off')
+
+        # Prepare comprehensive results text
+        result_text = [
+            "Processing Results:",
+            f"Transaction Type: {results.get('transaction_type', 'Not detected')}",
+            f"SIP Details Filled: {results.get('sip_details_filled', False)}",
+            f"OTM Details Filled: {results.get('otm_details_filled', False)}",
+            f"Frequency: {results.get('frequency', 'Not detected')}",
+            f"Total Pages: {results.get('total_pages', 0)}",
+            f"Form Types: {', '.join(results.get('form_types', []))}",
+            "\nDetected Text Blocks by Section:"
+        ]
+
+        # Add detected text blocks by section
+        for section_name, blocks in text_blocks.items():
+            result_text.append(f"\n{section_name.replace('_', ' ').title()}:")
+            for block in blocks:
+                result_text.append(
+                    f"- Text: {block['text'][:30]}... (Confidence: {block['confidence']:.2f})"
+                )
+
+        plt.text(0.1, 0.9, '\n'.join(result_text),
+                fontsize=10, verticalalignment='top')
+
+        plt.tight_layout()
+        plt.show()
+def visualize_sip_form(validator: SIPValidator, image: np.ndarray, results: Dict):
+    """
+    Main function to visualize SIP form processing
+
+    Args:
+        validator: Instance of SIPValidator
+        image: The form image to process
+        results: Processing results dictionary
+    """
+    # Extract text from all sections
+    text_blocks = {}
+
+    # Get the sections from validator
+    sections = {
+        'transaction_type': (0.15, 0.25, 0.05, 0.95),
+        'sip_details': (0.35, 0.45, 0.05, 0.95),
+        # 'otm': (0.80, 0.98, 0.05, 0.95)
+        # 'otm': (0.50, 0.70, 0.05, 0.95)
+        'otm': (0.65, 0.95, 0.05, 0.95)  # y1=0.65, y2=0.95, x1=0.05, x2=0.95
+    }
+
+    # Extract text from each section
+    for section_name, coords in sections.items():
+        section_img = validator._extract_section(
+            image,
+            *coords
+        )
+        text_blocks[section_name] = validator._extract_text(
+            section_img,
+            f"Section - {section_name}"
+        )
+
+    # Create visualization helper instance
+    viz_helper = SIPVisualizationHelper()
+
+    # Generate and display the visualization
+    viz_helper.visualize_sip_processing(
+        image=image,
+        results=results.get('results', results),  # Handle both nested and flat results
+        text_blocks=text_blocks,
+        output_dir="sip_visualization"
+    )
+
+    # Print additional processing information
+    print("\nDetected Fields by Section:")
+
+    # Transaction Type Section
+    if results.get('results', results).get('transaction_type'):
+        print(f"\nTransaction Type Detected: {results.get('results', results)['transaction_type']}")
+
+    # SIP Details Section
+    if text_blocks.get('sip_details'):
+        print("\nSIP Details Section:")
+        print(f"Frequency Detected: {results.get('results', results).get('frequency', 'Not detected')}")
+        print(f"SIP Details Filled: {results.get('results', results).get('sip_details_filled', False)}")
+
+    # OTM Section
+    if text_blocks.get('otm'):
+        print("\nOTM Section:")
+        print(f"OTM Details Filled: {results.get('results', results).get('otm_details_filled', False)}")
+
+        # Show detected text in OTM section with confidence scores
+        print("\nDetected OTM Fields:")
+        for block in text_blocks['otm']:
+            if block['confidence'] > 0.4:  # Only show higher confidence detections
+                print(f"- {block['text']} (Confidence: {block['confidence']:.2f})")
+
+####part4
+class VisualizationHelper:
+    """Helper class for visualizing form processing results"""
+
+    @staticmethod
+    def draw_bounding_boxes(image: np.ndarray, text_blocks: List[Dict], color=(0, 255, 0), thickness=2):
+        """Draw bounding boxes on image for text blocks"""
+        viz_image = image.copy()
+        h, w = image.shape[:2]
+
+        for block in text_blocks:
+            # Convert relative coordinates to absolute
+            x1, y1, x2, y2 = block['bbox']
+            start_point = (int(x1 * w), int(y1 * h))
+            end_point = (int(x2 * w), int(y2 * h))
+
+            # Draw rectangle
+            cv2.rectangle(viz_image, start_point, end_point, color, thickness)
+
+            # Add text above the box
+            text = block['text'][:20] + "..." if len(block['text']) > 20 else block['text']
+            cv2.putText(viz_image, text,
+                      (start_point[0], start_point[1] - 5),
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+
+        return viz_image
+
+    @staticmethod
+    def save_visualization(image: np.ndarray, filename: str):
+        """Save visualization image"""
+        cv2.imwrite(filename, cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+
+    @staticmethod
+    def display_section_with_boxes(title: str, original_image: np.ndarray,
+                                 section_coords: Tuple[float, float, float, float],
+                                 text_blocks: List[Dict]):
+        """Display a section with its bounding boxes"""
+        h, w = original_image.shape[:2]
+        y1, y2, x1, x2 = section_coords
+
+        # Extract section
+        section = original_image[int(y1*h):int(y2*h), int(x1*w):int(x2*w)]
+
+        # Draw bounding boxes
+        section_with_boxes = VisualizationHelper.draw_bounding_boxes(section, text_blocks)
+
+        # Display using matplotlib
+        plt.figure(figsize=(15, 10))
+        plt.title(f"{title} - Section Coordinates: ({x1:.2f}, {y1:.2f}) to ({x2:.2f}, {y2:.2f})")
+        plt.imshow(section_with_boxes)
+        plt.axis('off')
+        plt.show()
+
+        return section_with_boxes
+
+def visualize_form_processing(validator: FormValidator, images: List[np.ndarray], results: Dict):
+    """Visualize form processing with sections and text extraction"""
+    viz_helper = VisualizationHelper()
+
+    # Create output directory if it doesn't exist
+    output_dir = "form_visualization"
+    os.makedirs(output_dir, exist_ok=True)
+
+    for i, image in enumerate(images):
+        print(f"\nProcessing Page {i+1}")
+        plt.figure(figsize=(15, 20))
+
+        # Display original image
+        plt.subplot(2, 1, 1)
+        plt.title(f"Original Page {i+1}")
+        plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+        plt.axis('off')
+
+        # Extract and display sections based on form type
+        if results['form_type'] == FormType.SIP:
+            if i == 0:
+                # Transaction Type Section
+                transaction_section = validator._extract_section(image, 0.1, 0.2, 0.05, 0.95)
+                text_blocks = validator._extract_text(transaction_section)
+                viz_transaction = viz_helper.display_section_with_boxes(
+                    "Transaction Type Section", image, (0.1, 0.2, 0.05, 0.95), text_blocks)
+                viz_helper.save_visualization(viz_transaction,
+                    f"{output_dir}/page{i+1}_transaction_section.png")
+
+                # SIP Details Section
+                sip_section = validator._extract_section(image, 0.3, 0.6, 0.05, 0.95)
+                text_blocks = validator._extract_text(sip_section)
+                viz_sip = viz_helper.display_section_with_boxes(
+                    "SIP Details Section", image, (0.3, 0.6, 0.05, 0.95), text_blocks)
+                viz_helper.save_visualization(viz_sip,
+                    f"{output_dir}/page{i+1}_sip_section.png")
+
+            elif i == 1:
+                # OTM Section
+                otm_section = validator._extract_section(image, 0.5, 0.98, 0.05, 0.95)
+                text_blocks = validator._extract_text(otm_section)
+                viz_otm = viz_helper.display_section_with_boxes(
+                    "OTM Section", image, (0.5, 0.98, 0.05, 0.95), text_blocks)
+                viz_helper.save_visualization(viz_otm,
+                    f"{output_dir}/page{i+1}_otm_section.png")
+
+        elif results['form_type'] == FormType.CAF:
+            if i == 1:
+                # Section 8
+                section8_img = validator._extract_section(image, 0.15, 0.45, 0.05, 0.95)
+                text_blocks = validator._extract_text(section8_img)
+                viz_section8 = viz_helper.display_section_with_boxes(
+                    "Section 8", image, (0.15, 0.45, 0.05, 0.95), text_blocks)
+                viz_helper.save_visualization(viz_section8,
+                    f"{output_dir}/page{i+1}_section8.png")
+
+            elif i == 2:
+                # OTM Section
+                otm_img = validator._extract_section(image, 0.50, 0.98, 0.05, 0.95)
+                text_blocks = validator._extract_text(otm_img)
+                viz_otm = viz_helper.display_section_with_boxes(
+                    "OTM Section", image, (0.50, 0.98, 0.05, 0.95), text_blocks)
+                viz_helper.save_visualization(viz_otm,
+                    f"{output_dir}/page{i+1}_otm_section.png")
+
+        plt.tight_layout()
+        plt.show()
+
+    print(f"\nVisualization images have been saved to the '{output_dir}' directory")
+
+#part5
+class CTFVisualizationHelper:
+    """Helper class for visualizing CTF form processing results"""
+
+    def __init__(self):
+        self.colors = {
+            'ADDITIONAL_PURCHASE': (255, 0, 0),    # Red
+            'SWITCH': (0, 255, 0),                 # Green
+            'REDEMPTION': (0, 0, 255),             # Blue
+            'text_box': (255, 165, 0),             # Orange
+            'section_boundary': (128, 0, 128)      # Purple
+        }
+
+    def visualize_ctf_processing(self, image: np.ndarray, results: Dict,
+                               text_blocks: Dict[str, List[Dict]],
+                               output_dir: str = "ctf_visualization"):
+        """
+        Visualize CTF form processing with bounding boxes
+
+        Args:
+            image: Original form image
+            results: Processing results dictionary
+            text_blocks: Dictionary of text blocks by section
+            output_dir: Directory to save visualizations
+        """
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Create a copy for visualization
+        viz_image = image.copy()
+        h, w = image.shape[:2]
+
+        # Draw section boundaries
+        self._draw_section_boundaries(viz_image, h, w)
+
+        # Draw detected text boxes for each section
+        for section_name, blocks in text_blocks.items():
+            self._draw_text_boxes(viz_image, blocks, section_name, h, w)
+
+        # Save full page visualization
+        full_page_path = os.path.join(output_dir, "ctf_full_page.png")
+        cv2.imwrite(full_page_path, cv2.cvtColor(viz_image, cv2.COLOR_RGB2BGR))
+
+        # Create individual section visualizations
+        self._create_section_visualizations(image, text_blocks, output_dir)
+
+        # Display results
+        self._display_visualization_results(viz_image, results, text_blocks)
+
+    def _draw_section_boundaries(self, image: np.ndarray, h: int, w: int):
+        """Draw boundaries for each main section"""
+        sections = {
+            'ADDITIONAL_PURCHASE': (0.25, 0.32),
+            'SWITCH': (0.58, 0.75),
+            'REDEMPTION': (0.75, 0.92)
+        }
+
+        for section_name, (y1, y2) in sections.items():
+            # Draw section rectangle
+            start_point = (int(0.05 * w), int(y1 * h))
+            end_point = (int(0.95 * w), int(y2 * h))
+
+            cv2.rectangle(image, start_point, end_point,
+                         self.colors['section_boundary'], 2)
+
+            # Add section label
+            cv2.putText(image, section_name,
+                      (start_point[0], start_point[1] - 10),
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                      self.colors['section_boundary'], 2)
+
+    def _draw_text_boxes(self, image: np.ndarray, blocks: List[Dict],
+                        section_name: str, h: int, w: int):
+        """Draw bounding boxes for detected text"""
+        for block in blocks:
+            # Convert relative coordinates to absolute
+            x1, y1, x2, y2 = block['bbox']
+            start_point = (int(x1 * w), int(y1 * h))
+            end_point = (int(x2 * w), int(y2 * h))
+
+            # Draw text box
+            cv2.rectangle(image, start_point, end_point,
+                         self.colors['text_box'], 1)
+
+            # Add text and confidence
+            text = f"{block['text'][:20]}... ({block['confidence']:.2f})"
+            cv2.putText(image, text,
+                      (start_point[0], start_point[1] - 5),
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.4,
+                      self.colors['text_box'], 1)
+
+    def _create_section_visualizations(self, image: np.ndarray,
+                                     text_blocks: Dict[str, List[Dict]],
+                                     output_dir: str):
+        """Create and save visualizations for individual sections"""
+        h, w = image.shape[:2]
+
+        for section_name, blocks in text_blocks.items():
+            # Extract section coordinates based on section name
+            if 'ADDITIONAL_PURCHASE' in section_name:
+                y1, y2 = 0.25, 0.32
+            elif 'SWITCH' in section_name:
+                y1, y2 = 0.58, 0.75
+            elif 'REDEMPTION' in section_name:
+                y1, y2 = 0.75, 0.92
+            else:
+                continue
+
+            # Extract section image
+            section_img = image[int(y1*h):int(y2*h), int(0.05*w):int(0.95*w)]
+
+            # Create visualization for this section
+            section_viz = section_img.copy()
+
+            # Draw text boxes in this section
+            for block in blocks:
+                # Adjust coordinates relative to section
+                rel_x1 = (block['bbox'][0] - 0.05) / 0.9  # Adjust for section width
+                rel_y1 = (block['bbox'][1] - y1) / (y2 - y1)
+                rel_x2 = (block['bbox'][2] - 0.05) / 0.9
+                rel_y2 = (block['bbox'][3] - y1) / (y2 - y1)
+
+                sh, sw = section_viz.shape[:2]
+                start_point = (int(rel_x1 * sw), int(rel_y1 * sh))
+                end_point = (int(rel_x2 * sw), int(rel_y2 * sh))
+
+                cv2.rectangle(section_viz, start_point, end_point,
+                            self.colors['text_box'], 1)
+
+                text = f"{block['text'][:20]}... ({block['confidence']:.2f})"
+                cv2.putText(section_viz, text,
+                          (start_point[0], start_point[1] - 5),
+                          cv2.FONT_HERSHEY_SIMPLEX, 0.4,
+                          self.colors['text_box'], 1)
+
+            # Save section visualization
+            section_path = os.path.join(output_dir, f"section_{section_name}.png")
+            cv2.imwrite(section_path, cv2.cvtColor(section_viz, cv2.COLOR_RGB2BGR))
+
+    def _display_visualization_results(self, image: np.ndarray,
+                                    results: Dict,
+                                    text_blocks: Dict[str, List[Dict]]):
+        """Display visualization results using matplotlib"""
+        plt.figure(figsize=(15, 20))
+
+        # Display full page with annotations
+        plt.subplot(2, 1, 1)
+        plt.title("CTF Form Processing Visualization")
+        plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+        plt.axis('off')
+
+        # Display processing results
+        plt.subplot(2, 1, 2)
+        plt.axis('off')
+
+        # Access nested results correctly
+        result_text = [
+            "Processing Results:",
+            f"Form Type: {results.get('form_type', 'Unknown')}",
+        ]
+
+        # Access nested results data
+        if 'results' in results:
+            nested_results = results['results']
+            result_text.extend([
+                f"Transaction Types: {', '.join(nested_results.get('transaction_types', []))}",
+                f"SIP Form Attached: {nested_results.get('sip_form_attached', False)}",
+                f"Total Pages: {nested_results.get('total_pages', 0)}",
+                f"Form Types: {', '.join(nested_results.get('form_types', []))}"
+            ])
+
+        result_text.append("\nDetected Text Blocks:")
+
+        for section_name, blocks in text_blocks.items():
+            result_text.append(f"\n{section_name}:")
+            for block in blocks:
+                result_text.append(
+                    f"- Text: {block['text'][:30]}... (Confidence: {block['confidence']:.2f})"
+                )
+
+        plt.text(0.1, 0.9, '\n'.join(result_text),
+                fontsize=10, verticalalignment='top')
+
+        plt.tight_layout()
+        plt.show()
+
+def visualize_ctf_form(validator: CTFValidator, image: np.ndarray, results: Dict):
+    """Main function to visualize CTF form processing"""
+    # Extract text from all sections
+    text_blocks = {}
+
+    for section_name, coords in validator.transaction_types.items():
+        section_img = validator._extract_section(
+            image,
+            coords['y1'],
+            coords['y2'],
+            0.05,
+            0.95
+        )
+        text_blocks[section_name] = validator._extract_text(
+            section_img,
+            f"Section {coords['section_num']} - {section_name}"
+        )
+
+    # Create visualization
+    viz_helper = CTFVisualizationHelper()
+    viz_helper.visualize_ctf_processing(image, results, text_blocks)
+
+class CAFVisualizationHelper:
+    """Helper class for visualizing CAF form processing results"""
+
+    def __init__(self):
+        self.colors = {
+            'section8': (255, 0, 0),     # Red for Section 8
+            'otm': (0, 255, 0),          # Green for OTM section
+            'text_box': (255, 165, 0),   # Orange for detected text
+            'section_boundary': (128, 0, 128),  # Purple for section boundaries
+            'checkbox': (0, 0, 255)       # Blue for checkboxes
+        }
+
+        # Define section coordinates
+        self.sections = {
+            'section8': {
+                'page': 1,  # Page 2
+                'coords': (0.15, 0.45, 0.05, 0.95),  # y1, y2, x1, x2
+                'name': 'Section 8 - Investment Details'
+            },
+            'otm': {
+                'page': 2,  # Page 3
+                'coords': (0.50, 0.98, 0.05, 0.95),
+                'name': 'OTM Section'
+            }
+        }
+
+    def visualize_caf_processing(self, images: List[np.ndarray], results: Dict,
+                                text_blocks: Dict[str, List[Dict]],
+                                output_dir: str = "caf_visualization"):
+        """
+        Visualize CAF form processing with bounding boxes
+
+        Args:
+            images: List of form page images
+            results: Processing results dictionary
+            text_blocks: Dictionary of text blocks by section
+            output_dir: Directory to save visualizations
+        """
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Process each relevant page
+        for section_name, section_info in self.sections.items():
+            page_idx = section_info['page']
+            if page_idx < len(images):
+                # Create copy for visualization
+                image = images[page_idx].copy()
+
+                # Draw section boundary
+                self._draw_section_boundary(image, section_info)
+
+                # Draw text boxes if available for this section
+                if section_name in text_blocks:
+                    self._draw_text_boxes(image, text_blocks[section_name],
+                                        section_info['coords'])
+
+                # Save section visualization
+                section_path = os.path.join(output_dir, f"page_{page_idx+1}_{section_name}.png")
+                cv2.imwrite(section_path, cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+
+                # Extract and save section close-up
+                self._save_section_closeup(image, section_info, section_name, output_dir)
+
+                # Display the visualization
+                self._display_section_visualization(image, section_name, results)
+
+    def _draw_section_boundary(self, image: np.ndarray, section_info: Dict):
+        """Draw boundary for a section"""
+        h, w = image.shape[:2]
+        y1, y2, x1, x2 = section_info['coords']
+
+        # Draw rectangle around section
+        start_point = (int(x1 * w), int(y1 * h))
+        end_point = (int(x2 * w), int(y2 * h))
+
+        cv2.rectangle(image, start_point, end_point,
+                     self.colors['section_boundary'], 2)
+
+        # Add section label
+        cv2.putText(image, section_info['name'],
+                  (start_point[0], start_point[1] - 10),
+                  cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                  self.colors['section_boundary'], 2)
+
+    def _draw_text_boxes(self, image: np.ndarray, blocks: List[Dict],
+                        section_coords: Tuple[float, float, float, float]):
+        """Draw bounding boxes for detected text"""
+        h, w = image.shape[:2]
+        y1, y2, x1, x2 = section_coords
+
+        for block in blocks:
+            # Convert relative coordinates to absolute
+            rel_x1 = x1 + block['bbox'][0] * (x2 - x1)
+            rel_y1 = y1 + block['bbox'][1] * (y2 - y1)
+            rel_x2 = x1 + block['bbox'][2] * (x2 - x1)
+            rel_y2 = y1 + block['bbox'][3] * (y2 - y1)
+
+            start_point = (int(rel_x1 * w), int(rel_y1 * h))
+            end_point = (int(rel_x2 * w), int(rel_y2 * h))
+
+            # Draw text box
+            cv2.rectangle(image, start_point, end_point,
+                         self.colors['text_box'], 1)
+
+            # Add text and confidence
+            text = f"{block['text'][:20]}... ({block['confidence']:.2f})"
+            cv2.putText(image, text,
+                      (start_point[0], start_point[1] - 5),
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.4,
+                      self.colors['text_box'], 1)
+
+    def _save_section_closeup(self, image: np.ndarray, section_info: Dict,
+                            section_name: str, output_dir: str):
+        """Extract and save section close-up"""
+        h, w = image.shape[:2]
+        y1, y2, x1, x2 = section_info['coords']
+
+        # Extract section
+        section = image[int(y1*h):int(y2*h), int(x1*w):int(x2*w)]
+
+        # Save section close-up
+        section_path = os.path.join(output_dir, f"{section_name}_closeup.png")
+        cv2.imwrite(section_path, cv2.cvtColor(section, cv2.COLOR_RGB2BGR))
+
+    def _display_section_visualization(self, image: np.ndarray,
+                                    section_name: str,
+                                    results: Dict):
+        """Display section visualization with results"""
+        plt.figure(figsize=(15, 20))
+
+        # Display image with annotations
+        plt.subplot(2, 1, 1)
+        plt.title(f"CAF Form - {section_name}")
+        plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+        plt.axis('off')
+
+        # Display results
+        plt.subplot(2, 1, 2)
+        plt.axis('off')
+
+        # Access nested results correctly
+        result_text = [
+            "Processing Results:",
+            f"Form Type: {results.get('form_type', 'Unknown')}"
+        ]
+
+        if 'results' in results:
+            nested_results = results['results']
+            result_text.extend([
+                f"SIP Details Filled: {nested_results.get('sip_details_filled', False)}",
+                f"OTM Details Filled: {nested_results.get('otm_details_filled', False)}",
+                f"Total Pages: {nested_results.get('total_pages', 0)}",
+                f"Form Types: {', '.join(nested_results.get('form_types', []))}"
+            ])
+
+            # Add phase 2 data if available
+            if 'phase2_data' in nested_results:
+                phase2 = nested_results['phase2_data']
+                result_text.extend([
+                    "\nPhase 2 Data:",
+                    f"Total Schemes: {phase2.get('total_schemes', 0)}",
+                    f"Frequency: {phase2.get('frequency', 'Not detected')}",
+                    f"Filled Rows: {phase2.get('filled_rows', 0)}"
+                ])
+
+        plt.text(0.1, 0.9, '\n'.join(result_text),
+                fontsize=10, verticalalignment='top')
+
+        plt.tight_layout()
+        plt.show()
+
+def visualize_caf_form(validator: CAFValidator, images: List[np.ndarray], results: Dict):
+    """Main function to visualize CAF form processing"""
+    # Extract text from relevant sections
+    text_blocks = {}
+
+    # Extract Section 8 (Page 2)
+    if len(images) >= 2:
+        section8_img = validator._extract_section(
+            images[1], 0.15, 0.45, 0.05, 0.95
+        )
+        text_blocks['section8'] = validator._extract_text(
+            section8_img,
+            "Section 8"
+        )
+
+    # Extract OTM Section (Page 3)
+    if len(images) >= 3:
+        otm_img = validator._extract_section(
+            images[2], 0.50, 0.98, 0.05, 0.95
+        )
+        text_blocks['otm'] = validator._extract_text(
+            otm_img,
+            "OTM Section"
+        )
+
+    # Create visualization
+    viz_helper = CAFVisualizationHelper()
+    viz_helper.visualize_caf_processing(images, results, text_blocks)
+
+##part 6
+def detect_form_type(image: np.ndarray) -> str:
+    """
+    Detect form type from first page with improved detection for Multiple SIP
+    Returns: FormType (CAF, CTF, SIP, or MULTIPLE_SIP)
+    """
+    reader = easyocr.Reader(['en'])
+
+    # Extract text from the header region (top 20% of the page)
+    h, w = image.shape[:2]
+    header_region = image[0:int(0.2*h), 0:w]
+    text_blocks = reader.readtext(header_region)
+
+    # Convert text blocks to lowercase for matching
+    header_text = ' '.join(block[1].lower() for block in text_blocks)
+    print(f"Detected header text: {header_text}")  # Debug print
+
+    # Define keywords with priorities and thresholds
+    form_keywords = {
+        FormType.MULTIPLE_SIP: {
+            'keywords': ['multiple sip', 'multiple sip registration', 'multiple registration'],
+            'threshold': 0.8,
+            'priority': 1  # Highest priority
+        },
+        FormType.SIP: {
+            'keywords': ['sip & sip-top up registration', 'sip registration', 'sip with top-up'],
+            'threshold': 0.8,
+            'priority': 2
+        },
+        FormType.CAF: {
+            'keywords': ['common application form', 'caf', 'multiple schemes'],
+            'threshold': 0.8,
+            'priority': 3
+        },
+        FormType.CTF: {
+            'keywords': ['common transaction form', 'ctf', 'transaction slip'],
+            'threshold': 0.8,
+            'priority': 4
+        }
+    }
+
+    # First try exact matches with priorities
+    for form_type, config in sorted(form_keywords.items(), key=lambda x: x[1]['priority']):
+        for keyword in config['keywords']:
+            if keyword in header_text:
+                print(f"Exact match found for {form_type} with keyword: {keyword}")
+                return form_type
+
+    # Try fuzzy matching if no exact match found
+    best_match_type = None
+    best_match_score = 0
+    best_match_priority = float('inf')
+
+    for form_type, config in form_keywords.items():
+        for keyword in config['keywords']:
+            score = Levenshtein.ratio(header_text, keyword)
+            if score > config['threshold'] and score > best_match_score:
+                # If same score, use priority to decide
+                if score == best_match_score and config['priority'] >= best_match_priority:
+                    continue
+                best_match_score = score
+                best_match_type = form_type
+                best_match_priority = config['priority']
+                print(f"Fuzzy match found for {form_type} with score: {score}")
+
+    if best_match_type:
+        return best_match_type
+
+    # Additional check specifically for Multiple SIP form
+    multiple_sip_indicators = [
+        'multiple sip',
+        'multiple registration',
+        'multiple scheme',
+        'scheme 1',
+        'scheme 2',
+        'scheme 3'
+    ]
+
+    # Extract text from larger portion for additional checking
+    full_top_region = image[0:int(0.4*h), 0:w]
+    full_text_blocks = reader.readtext(full_top_region)
+    full_text = ' '.join(block[1].lower() for block in full_text_blocks)
+
+    # Check for Multiple SIP indicators
+    for indicator in multiple_sip_indicators:
+        if indicator in full_text:
+            print(f"Multiple SIP indicator found: {indicator}")
+            return FormType.MULTIPLE_SIP
+
+    # If still no match, check the entire first page
+    page_text_blocks = reader.readtext(image)
+    page_text = ' '.join(block[1].lower() for block in page_text_blocks)
+
+    for form_type, config in sorted(form_keywords.items(), key=lambda x: x[1]['priority']):
+        for keyword in config['keywords']:
+            if keyword in page_text:
+                print(f"Full page match found for {form_type} with keyword: {keyword}")
+                return form_type
+
+    raise ValueError("Unable to determine form type with confidence")
+
+
+# Update the main processing function to use the correct visualizer
+
+def process_form_with_visualization(file_path: str) -> Dict:
+    """Process form with enhanced visualization"""
+    try:
+        # Initialize base validator and visualization helper
+        base_validator = FormValidator()
+        viz_helper = EnhancedVisualizationHelper()
+        
+        # Load images
+        images = base_validator.load_document(file_path)
+        if not images:
+            raise ValueError("No images found in document")
+
+        # Detect form type
+        form_type = detect_form_type(images[0])
+        print(f"Detected form type: {form_type}")
+
+        # Initialize appropriate validator based on form type
+        validators = {
+            FormType.CAF: CAFValidator(),
+            FormType.CTF: CTFValidator(),
+            FormType.SIP: SIPValidator(),
+            FormType.MULTIPLE_SIP: MultipleSIPValidator()
+        }
+
+        if form_type not in validators:
+            raise ValueError(f"Unsupported form type: {form_type}")
+
+        validator = validators[form_type]
+
+        # Process form and collect results
+        results = validator.validate_form(images)
+        
+        # Initialize handwriting detector
+        handwriting_detector = HandwritingDetectorV3()
+
+        # Process each page
+        for i, image in enumerate(images):
+            # Save temporary image for handwriting detection
+            temp_path = f'temp_page_{i}.png'
+            cv2.imwrite(temp_path, image)
+            
+            # Detect handwritten regions
+            handwriting_regions, _ = handwriting_detector.detect_handwriting(temp_path)
+            os.remove(temp_path)  # Clean up temp file
+
+            # Extract text blocks for each section
+            text_blocks = {}
+            
+            if form_type == FormType.SIP:
+                sections = {
+                    'transaction_type': validator.sections['transaction_type']['coords'],
+                    'sip_details': validator.sections['sip_details']['coords'],
+                    'otm': validator.sections['otm']['coords']
+                }
+            elif form_type == FormType.CAF:
+                if i == 1:  # Page 2
+                    sections = {'section8': (0.15, 0.45, 0.05, 0.95)}
+                elif i == 2:  # Page 3
+                    sections = {'otm': (0.50, 0.98, 0.05, 0.95)}
+                else:
+                    sections = {}
+            elif form_type == FormType.CTF:
+                sections = {
+                    name: (coords['y1'], coords['y2'], 0.05, 0.95)
+                    for name, coords in validator.transaction_types.items()
+                }
+            else:  # MULTIPLE_SIP
+                sections = validator.sections
+
+            # Extract text blocks for each section
+            for section_name, coords in sections.items():
+                section_img = validator._extract_section(image, *coords)
+                text_blocks[section_name] = validator._extract_text(section_img)
+
+            # Create visualization
+            viz_helper.visualize_processing(
+                image=image,
+                results=results,
+                handwriting_regions=handwriting_regions,
+                text_blocks=text_blocks,
+                output_dir=f"visualization_page_{i+1}"
+            )
+
+        return {
+            'status': 'success',
+            'form_type': form_type,
+            'results': results
+        }
+
+    except Exception as e:
+        logging.error(f"Error processing form: {str(e)}")
+        return {
+            'status': 'error',
+            'error_message': str(e)
+        }
+
+def process_form_in_colab():
+    """Process form with Colab integration and enhanced visualization"""
+    try:
+        # Get uploaded file
+        file_path = upload_and_save_file()
+
+        # Process the form with visualization
+        results = process_form_with_visualization(file_path)
+
+        if results['status'] == 'error':
+            print(f"Error: {results['error_message']}")
+            return None
+
+        print("\nProcessing Results:")
+        print(f"Form Type: {results['form_type']}")
+        
+        if results['form_type'] == FormType.SIP:
+            print("\nSIP Form Details:")
+            print(f"SIP Details Filled: {results['results']['sip_details_filled']}")
+            print(f"OTM Details Filled: {results['results']['otm_details_filled']}")
+            if results['results'].get('handwriting_detected'):
+                print("\nHandwriting Detection:")
+                print(f"SIP Details Section: {results['results']['handwriting_detected']['sip_details']}")
+                print(f"OTM Section: {results['results']['handwriting_detected']['otm']}")
+        
+        elif results['form_type'] == FormType.CAF:
+            print("\nCAF Form Details:")
+            print(f"Section 8 Filled: {results['results'].get('phase2_data', {}).get('has_handwriting', False)}")
+            print(f"OTM Details Filled: {results['results']['otm_details_filled']}")
+        
+        elif results['form_type'] == FormType.CTF:
+            print("\nCTF Form Details:")
+            print("Transaction Types:", ', '.join(results['results']['transaction_types']))
+            print("Handwriting Detected In:")
+            for section, has_handwriting in results['results']['handwriting_detected'].items():
+                print(f"- {section}: {has_handwriting}")
+
+        return results
+
+    except Exception as e:
+        print(f"Error processing form: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+class HandwritingDetectorV3:
+    """Enhanced handwriting detection class"""
+    
+    def __init__(self):
+        self.min_area = 500
+        self.max_area = 50000
+        
+    def preprocess(self, image):
+        # Convert to grayscale
+        if len(image.shape) == 3:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = image
+        
+        # Enhance contrast
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        enhanced = clahe.apply(gray)
+        
+        # Binarize
+        _, binary = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        
+        return binary
+        
+    def detect_form_fields(self, binary):
+        """Detect empty form fields to exclude them"""
+        # Detect horizontal and vertical lines (typical in forms)
+        horizontal = np.copy(binary)
+        vertical = np.copy(binary)
+        
+        # Specify size on horizontal axis
+        cols = horizontal.shape[1]
+        horizontal_size = cols // 30
+        
+        # Specify size on vertical axis
+        rows = vertical.shape[0]
+        verticalsize = rows // 30
+        
+        # Create structure elements
+        horizontalStructure = cv2.getStructuringElement(cv2.MORPH_RECT, (horizontal_size, 1))
+        verticalStructure = cv2.getStructuringElement(cv2.MORPH_RECT, (1, verticalsize))
+        
+        # Apply morphology operations
+        horizontal = cv2.erode(horizontal, horizontalStructure)
+        horizontal = cv2.dilate(horizontal, horizontalStructure)
+        
+        vertical = cv2.erode(vertical, verticalStructure)
+        vertical = cv2.dilate(vertical, verticalStructure)
+        
+        # Combine to get form field mask
+        form_fields = cv2.bitwise_or(horizontal, vertical)
+        
+        return form_fields
+        
+    def is_handwritten(self, roi):
+        """Analyze if region contains handwriting based on statistical features"""
+        if roi.size == 0:
+            return False
+            
+        # Calculate statistical features
+        pixel_density = np.sum(roi) / roi.size
+        if pixel_density < 0.01:  # Almost empty region
+            return False
+            
+        # Calculate stroke consistency
+        rows, cols = roi.shape
+        row_profiles = np.sum(roi, axis=1) / cols
+        col_profiles = np.sum(roi, axis=0) / rows
+        
+        # Printed text tends to have more regular profiles
+        row_variance = np.var(row_profiles)
+        col_variance = np.var(col_profiles)
+        
+        # Handwriting typically has higher variance
+        if row_variance < 0.01 or col_variance < 0.01:
+            return False
+            
+        # Check stroke thickness consistency
+        contours, _ = cv2.findContours(roi.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if len(contours) == 0:
+            return False
+            
+        thicknesses = []
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            perimeter = cv2.arcLength(contour, True)
+            if perimeter > 0:
+                thickness = area / perimeter
+                thicknesses.append(thickness)
+                
+        if len(thicknesses) > 0:
+            thickness_variance = np.var(thicknesses)
+            # Printed text has more consistent stroke thickness
+            return thickness_variance > 0.5
+            
+        return False
+
+    def detect_handwriting(self, image_path):
+        """Detect handwritten regions in an image"""
+        # Read image
+        image = cv2.imread(image_path)
+        if image is None:
+            raise ValueError("Could not read image")
+            
+        # Preprocess
+        binary = self.preprocess(image)
+        
+        # Detect form fields to exclude them
+        form_fields = self.detect_form_fields(binary)
+        
+        # Remove form fields from binary image
+        content = cv2.bitwise_and(binary, binary, mask=cv2.bitwise_not(form_fields))
+        
+        # Find contours
+        contours, _ = cv2.findContours(content, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Analyze each region
+        handwritten_regions = []
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if self.min_area < area < self.max_area:
+                x, y, w, h = cv2.boundingRect(contour)
+                roi = content[y:y+h, x:x+w]
+                
+                if self.is_handwritten(roi):
+                    handwritten_regions.append((x, y, w, h))
+        
+        return handwritten_regions, image
+
+    def visualize_results(self, image, regions):
+        """Draw detected regions on image"""
+        result = image.copy()
+        for (x, y, w, h) in regions:
+            cv2.rectangle(result, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        return result
+
+
+if __name__ == "__main__":
+    # Display welcome message
+    print("=== Enhanced Form Validation System ===")
+    print("This system can process:")
+    print("1. CAF (Common Application Form)")
+    print("2. CTF (Common Transaction Form)")
+    print("3. SIP (Systematic Investment Plan)")
+    print("4. Multiple SIP Form")
+    print("\nSupported formats: PDF and TIFF")
+    print("Enhanced features:")
+    print("- Handwriting detection")
+    print("- Detailed visualizations")
+    print("- Confidence scoring")
+    print("\nPlease upload your form when prompted...")
+
+    # Process the form
+    results = process_form_in_colab()
